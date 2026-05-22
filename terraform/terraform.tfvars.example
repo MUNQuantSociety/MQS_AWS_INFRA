@@ -1,0 +1,38 @@
+# Copy to terraform.tfvars and fill in real values. Do NOT commit terraform.tfvars.
+
+aws_region          = "us-east-2"
+project_name        = "mqsmaster"
+environment         = "prod"
+ecr_repository_name = "mqsmaster"
+image_tag           = "latest"
+
+# Market task (scheduled, Mon-Fri).
+market_task_cpu    = "2048" # 2 vCPU
+market_task_memory = "8192" # 8 GB
+
+# NLP service (always-on). Drop to "256"/"2048" for ~$11/mo, slower batches.
+nlp_task_cpu      = "512"  # .5 vCPU
+nlp_task_memory   = "2048" # 2 GB - FinBERT base floor
+nlp_desired_count = 1
+
+log_retention_days = 14
+
+# Cron fires at local clock time in schedule_timezone (DST-aware).
+schedule_expression    = "cron(0 8 ? * MON-FRI *)"
+schedule_timezone      = "America/St_Johns"
+use_scheduler_timezone = true
+
+db_secret_values = {
+  db_user  = "admin"
+  password = "REPLACE_ME"
+  host     = "munquant.cair.mun.ca"
+  port     = "25060"
+  database = "mqsdb"
+  sslmode  = "prefer"
+}
+
+api_secret_values = {
+  FMP_API_KEY = "REPLACE_ME"
+  ALPHA_KEY   = "REPLACE_ME"
+  APIFY_KEY   = "REPLACE_ME"
+}
