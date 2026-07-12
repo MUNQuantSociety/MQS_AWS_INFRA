@@ -37,6 +37,63 @@ variable "image_tag" {
 }
 
 ###############################################################################
+# RDS PostgreSQL
+###############################################################################
+
+variable "db_engine_version" {
+  description = "Postgres major (or major.minor) version."
+  type        = string
+  default     = "16"
+}
+
+variable "db_instance_class" {
+  description = <<EOT
+RDS instance class. 4 GB RAM options (each pairs with 2 vCPU burstable):
+  db.t4g.medium  (Graviton/ARM, cheapest 4 GB)  <- default
+  db.t3.medium   (x86)
+Bump to db.t4g.large / db.t3.large for 8 GB.
+EOT
+  type        = string
+  default     = "db.t4g.medium"
+}
+
+variable "db_allocated_storage" {
+  description = "Initial gp3 storage in GB (e.g. 100 or 300)."
+  type        = number
+  default     = 100
+}
+
+variable "db_max_allocated_storage" {
+  description = "Storage-autoscaling ceiling in GB. Set == db_allocated_storage to disable autoscaling."
+  type        = number
+  default     = 300
+}
+
+variable "db_multi_az" {
+  description = "Standby replica in a second AZ. Doubles instance + storage cost."
+  type        = bool
+  default     = false
+}
+
+variable "db_backup_retention_period" {
+  description = "Automated backup retention in days. 0 disables backups."
+  type        = number
+  default     = 7
+}
+
+variable "db_deletion_protection" {
+  description = "Block destroy/delete of the DB. Set true for prod."
+  type        = bool
+  default     = false
+}
+
+variable "db_skip_final_snapshot" {
+  description = "Skip final snapshot on delete. Set false for prod."
+  type        = bool
+  default     = true
+}
+
+###############################################################################
 # Market task (scheduled)
 ###############################################################################
 
@@ -121,7 +178,13 @@ variable "use_scheduler_timezone" {
 ###############################################################################
 
 variable "db_secret_values" {
-  description = "Initial DB credentials stored in Secrets Manager."
+  description = <<EOT
+DB credentials stored in Secrets Manager and used to provision RDS.
+  db_user / password / database -> become the RDS master user / password / db_name
+  password  MUST be set in terraform.tfvars (min 8 chars; no /, @, ", or space)
+  host      is IGNORED — overwritten with the RDS endpoint (see locals.tf)
+  port      is the Postgres port RDS listens on (5432 standard)
+EOT
   type = object({
     db_user  = string
     password = string
@@ -132,10 +195,10 @@ variable "db_secret_values" {
   })
   sensitive = true
   default = {
-    db_user  = "admin"
+    db_user  = "mqsadmin"
     password = "REPLACE_ME"
-    host     = "munquant.cair.mun.ca"
-    port     = "25060"
+    host     = "" # ignored — RDS endpoint injected at apply time
+    port     = "5432"
     database = "mqsdb"
     sslmode  = "prefer"
   }

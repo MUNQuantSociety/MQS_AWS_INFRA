@@ -14,11 +14,34 @@ module "network" {
   name_prefix = local.name_prefix
 }
 
+module "rds" {
+  source = "./modules/rds"
+
+  name_prefix            = local.name_prefix
+  vpc_id                 = module.network.vpc_id
+  subnet_ids             = module.network.subnet_ids
+  task_security_group_id = module.network.task_security_group_id
+
+  db_username = var.db_secret_values.db_user
+  db_password = var.db_secret_values.password
+  db_name     = var.db_secret_values.database
+  port        = tonumber(var.db_secret_values.port)
+
+  engine_version          = var.db_engine_version
+  instance_class          = var.db_instance_class
+  allocated_storage       = var.db_allocated_storage
+  max_allocated_storage   = var.db_max_allocated_storage
+  multi_az                = var.db_multi_az
+  backup_retention_period = var.db_backup_retention_period
+  deletion_protection     = var.db_deletion_protection
+  skip_final_snapshot     = var.db_skip_final_snapshot
+}
+
 module "secrets" {
   source = "./modules/secrets"
 
   name_prefix       = local.name_prefix
-  db_secret_values  = var.db_secret_values
+  db_secret_values  = local.db_secret_values
   api_secret_values = var.api_secret_values
 }
 

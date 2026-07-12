@@ -17,16 +17,28 @@ nlp_desired_count = 1
 
 log_retention_days = 14
 
+# RDS PostgreSQL. 4 GB RAM = 2 vCPU burstable.
+db_engine_version          = "16"
+db_instance_class          = "db.t4g.medium" # 2 vCPU / 4 GB (Graviton). db.t3.medium for x86.
+db_allocated_storage       = 100             # GB. Set 300 for more headroom.
+db_max_allocated_storage   = 300             # autoscale ceiling; == allocated to disable.
+db_multi_az                = false           # true = HA standby, ~2x cost.
+db_backup_retention_period = 7
+db_deletion_protection     = false # set true for prod
+db_skip_final_snapshot     = true  # set false for prod
+
 # Cron fires at local clock time in schedule_timezone (DST-aware).
 schedule_expression    = "cron(0 8 ? * MON-FRI *)"
 schedule_timezone      = "America/St_Johns"
 use_scheduler_timezone = true
 
+# db_user/password/database become the RDS master creds. host is ignored
+# (RDS endpoint injected automatically). password: min 8 chars, no / @ " space.
 db_secret_values = {
-  db_user  = "admin"
+  db_user  = "mqsadmin"
   password = "REPLACE_ME"
-  host     = "munquant.cair.mun.ca"
-  port     = "25060"
+  host     = "" # ignored — RDS endpoint used
+  port     = "5432"
   database = "mqsdb"
   sslmode  = "prefer"
 }

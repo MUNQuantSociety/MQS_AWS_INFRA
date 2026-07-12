@@ -71,3 +71,23 @@ output "scheduler_role_arn" {
   description = "IAM role assumed by EventBridge to RunTask."
   value       = module.scheduler.scheduler_role_arn
 }
+
+output "rds_endpoint" {
+  description = "RDS Postgres endpoint (host:port). Also written into the DB secret."
+  value       = module.rds.db_endpoint
+}
+
+output "rds_address" {
+  description = "RDS Postgres hostname."
+  value       = module.rds.db_address
+}
+
+output "rds_instance_id" {
+  description = "RDS instance identifier."
+  value       = module.rds.db_instance_id
+}
+
+output "rds_security_group_id" {
+  description = "Security group attached to the RDS instance."
+  value       = module.rds.security_group_id
+}
