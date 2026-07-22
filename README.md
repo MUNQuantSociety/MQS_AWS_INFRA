@@ -122,7 +122,7 @@ Terraform creates an empty ECR repo. Scheduled tasks will fail with
 push (after merging to main) or push manually:
 
 ```bash
-cd /Users/abhinav/Desktop/MQSMaster
+cd ../MQSMaster
 aws ecr get-login-password --region us-east-2 \
   | docker login --username AWS --password-stdin <acct>.dkr.ecr.us-east-2.amazonaws.com
 docker build -t mqsmaster:latest .
@@ -139,7 +139,7 @@ future console rotations are not overwritten by Terraform.
 ```bash
 aws secretsmanager put-secret-value \
   --secret-id mqsmaster-prod/db \
-  --secret-string '{"db_user":"admin","password":"new","host":"...","port":"25060","database":"mqsdb","sslmode":"prefer"}'
+  --secret-string '{"db_user":"admin","password":"new","host":"...","port":"5432","database":"mqsdb","sslmode":"prefer"}'
 ```
 
 ## Schedule
