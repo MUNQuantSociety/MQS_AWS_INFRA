@@ -8,7 +8,7 @@ GitHub Actions ──build──▶ ECR (mqsmaster)
                    ┌──────────┴──────────────────────────────────────────┐
                    ▼                                                     ▼
 ECS Service mqsmaster-prod-nlp           EventBridge Scheduler ──▶ ECS RunTask mqsmaster-prod
-  always-on Fargate                        cron @ 08:00 America/St_Johns   (market task, ephemeral)
+  always-on Fargate                        cron @ 11:00 America/St_Johns   (market task, ephemeral)
   desired_count = 1                        Mon–Fri                         start.sh (NLP stripped)
   python NLP/main_NLP.py                                                   market scripts:
                                                                             src/main.py
@@ -77,6 +77,21 @@ boundaries.
 The scheduler targets the task definition **family** rather than a pinned
 revision, so a CI-registered revision is picked up by the next scheduled run
 without a Terraform apply.
+
+### The trigger must not fire before the open
+
+`start.sh` evaluates `is_market_open` on the **first** iteration of its monitor
+loop, immediately after launching the market scripts. If the market is not open
+at that moment it SIGTERMs every one of them and exits.
+
+So the cron marks the market **open**, not a warm-up window. `cron(0 11 ? * MON-FRI *)`
+in `America/St_Johns` is 09:30 ET, since Newfoundland runs ET+1:30. The earlier
+08:00 default was 06:30 ET — three hours early — which ended the session seconds
+after it started.
+
+Container startup (image pull plus the `apt-get` curl/jq bootstrap) adds a couple
+of minutes before that first check runs, comfortably clearing the open. Baking
+curl and jq into the image removes that cushion; shift to 11:05 if you do.
 
 ## Image caveats
 

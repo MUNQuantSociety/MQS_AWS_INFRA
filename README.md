@@ -4,8 +4,10 @@ Terraform that provisions ECS Fargate and a managed Postgres to run the
 [`MQSMaster`](../MQSMaster) quantitative trading project.
 
 - **NLP service** (always-on): runs `python NLP/main_NLP.py` 24/7. ECS restarts it on crash.
-- **Market task** (scheduled, Mon–Fri): EventBridge fires before market open in
-  `America/St_Johns`. The container runs `start.sh` and exits when the market closes.
+- **Market task** (scheduled, Mon–Fri): EventBridge fires at the 09:30 ET market open
+  (11:00 `America/St_Johns`). The container runs `start.sh` and exits when the market
+  closes. The trigger must not be moved earlier — `start.sh` shuts the session down if
+  the market is not already open when it first checks.
 
 ## Documentation
 

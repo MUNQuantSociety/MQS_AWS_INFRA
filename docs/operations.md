@@ -79,10 +79,16 @@ aws ecs update-service --cluster mqsmaster-prod-cluster --service mqsmaster-prod
 Override in `terraform.tfvars`:
 
 ```hcl
-schedule_expression    = "cron(0 8 ? * MON-FRI *)"
+schedule_expression    = "cron(0 11 ? * MON-FRI *)"
 schedule_timezone      = "America/St_Johns"
 use_scheduler_timezone = true
 ```
+
+**Do not move this earlier than the market open.** `start.sh` evaluates
+`is_market_open` on the first iteration of its monitor loop, immediately after
+launching the market scripts — if the market is not open yet it SIGTERMs all of
+them and exits. 11:00 `America/St_Johns` is the 09:30 ET open, since Newfoundland
+runs ET+1:30.
 
 ## Adding a new environment
 

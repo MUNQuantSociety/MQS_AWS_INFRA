@@ -28,7 +28,10 @@ db_deletion_protection     = false # set true for prod
 db_skip_final_snapshot     = true  # set false for prod
 
 # Cron fires at local clock time in schedule_timezone (DST-aware).
-schedule_expression    = "cron(0 8 ? * MON-FRI *)"
+# 11:00 America/St_Johns == 09:30 ET market open (Newfoundland is ET+1:30).
+# Do NOT move this earlier: start.sh checks is_market_open immediately after
+# launching and shuts the session down if the market is not open yet.
+schedule_expression    = "cron(0 11 ? * MON-FRI *)"
 schedule_timezone      = "America/St_Johns"
 use_scheduler_timezone = true
 

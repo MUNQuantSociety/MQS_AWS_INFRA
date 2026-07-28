@@ -155,10 +155,18 @@ variable "schedule_expression" {
   description = <<EOT
 EventBridge cron expression. When use_scheduler_timezone is true, this is
 evaluated in schedule_timezone; otherwise in UTC.
-Default fires Mon-Fri at 8:00 AM local in schedule_timezone.
+
+Default fires Mon-Fri at 11:00 local, which with the America/St_Johns default is
+the 09:30 ET market open (Newfoundland is ET+1:30).
+
+This MUST NOT be set earlier than the open. start.sh's monitor loop evaluates
+is_market_open on its first iteration, immediately after launching the market
+scripts -- if the market is not yet open it SIGTERMs them all and exits. The
+previous 08:00 default was 06:30 ET, three hours early, so the session ended
+seconds after it began.
 EOT
   type        = string
-  default     = "cron(0 8 ? * MON-FRI *)"
+  default     = "cron(0 11 ? * MON-FRI *)"
 }
 
 variable "schedule_timezone" {
