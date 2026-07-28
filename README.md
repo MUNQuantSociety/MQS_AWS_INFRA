@@ -8,6 +8,8 @@ Terraform that provisions ECS Fargate and a managed Postgres to run the
   (11:00 `America/St_Johns`). The container runs `start.sh` and exits when the market
   closes. The trigger must not be moved earlier — `start.sh` shuts the session down if
   the market is not already open when it first checks.
+- **Refresh task** (weekly, Friday after close): runs `refresh.py` once and exits.
+  Scheduled outside market hours so the backfill never competes with live trading.
 
 ## Documentation
 
@@ -49,8 +51,9 @@ MQS_AWS_INFRA/
         ├── rds-postgres/                   # RDS instance, subnet group, DB SG
         ├── ecs-cluster/                    # Cluster + Fargate capacity providers
         ├── ecs-task-market/                # Market-hours task definition
+        ├── ecs-task-refresh/               # Weekly backfill task definition
         ├── ecs-service-nlp/                # Always-on task definition + ECS Service
-        └── eventbridge-scheduler/          # Scheduler/Rule + RunTask IAM role
+        └── eventbridge-scheduler/          # Market + refresh schedules, RunTask IAM role
 ```
 
 **Conventions.** Module directories are kebab-case and named for the AWS service
@@ -85,12 +88,12 @@ Full deploy steps in [docs/operations.md](docs/operations.md#deploy).
 
 | Service | Purpose |
 |---|---|
-| **ECS (Fargate)** | Runs both workloads — one long-lived Service, one scheduled task |
+| **ECS (Fargate)** | Runs all three workloads — one long-lived Service, two scheduled tasks |
 | **ECR** | Container image registry, with a lifecycle policy to expire old images |
 | **RDS (PostgreSQL)** | Managed database, private, reachable only from the task SG |
-| **EventBridge Scheduler** | Timezone-aware Mon–Fri cron that calls ECS `RunTask` |
+| **EventBridge Scheduler** | Timezone-aware crons that call ECS `RunTask` (market + refresh) |
 | **Secrets Manager** | DB credentials and API keys, injected by ECS at task start |
-| **CloudWatch Logs** | Single log group for both workloads, split by stream prefix |
+| **CloudWatch Logs** | Single log group for all workloads, split by stream prefix |
 | **IAM** | Task execution role, task role, scheduler invoke role |
 | **VPC / EC2 networking** | Default VPC + subnets (data sources), two managed security groups |
 

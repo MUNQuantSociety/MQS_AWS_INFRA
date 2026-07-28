@@ -15,6 +15,13 @@ nlp_task_cpu      = "512"  # .5 vCPU
 nlp_task_memory   = "2048" # 2 GB - FinBERT base floor
 nlp_desired_count = 1
 
+# Refresh task (weekly backfill, outside market hours).
+refresh_task_cpu    = "1024" # 1 vCPU - refresh.py is I/O bound
+refresh_task_memory = "2048" # 2 GB
+refresh_threads     = 4      # must stay < MQSDBConnector pool maxconn = 6
+refresh_exchange    = "NYSE"
+refresh_extra_args  = [] # e.g. ["--skip-backfill"]
+
 log_retention_days = 14
 
 # RDS PostgreSQL. 4 GB RAM = 2 vCPU burstable.
@@ -31,9 +38,13 @@ db_skip_final_snapshot     = true  # set false for prod
 # 11:00 America/St_Johns == 09:30 ET market open (Newfoundland is ET+1:30).
 # Do NOT move this earlier: start.sh checks is_market_open immediately after
 # launching and shuts the session down if the market is not open yet.
-schedule_expression    = "cron(0 11 ? * MON-FRI *)"
-schedule_timezone      = "America/St_Johns"
-use_scheduler_timezone = true
+#
+# Refresh sits ~1h after the 16:00 ET close (17:30 local in Newfoundland), so it
+# never overlaps the market task. Recompute both if schedule_timezone changes.
+schedule_expression         = "cron(0 11 ? * MON-FRI *)"
+refresh_schedule_expression = "cron(30 18 ? * FRI *)"
+schedule_timezone           = "America/St_Johns"
+use_scheduler_timezone      = true
 
 # db_user/password/database become the RDS master creds. host is ignored
 # (RDS endpoint injected automatically). password: min 8 chars, no / @ " space.
