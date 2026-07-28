@@ -27,6 +27,16 @@ output "market_container_name" {
   value       = module.ecs_task_market.container_name
 }
 
+output "refresh_task_definition_family" {
+  description = "Weekly refresh task definition family. CI/CD registers new revisions here."
+  value       = module.ecs_task_refresh.task_definition_family
+}
+
+output "refresh_container_name" {
+  description = "Refresh container name (for CI/CD render step)."
+  value       = module.ecs_task_refresh.container_name
+}
+
 output "nlp_task_definition_family" {
   description = "Always-on NLP task definition family."
   value       = module.ecs_service_nlp.task_definition_family
@@ -70,6 +80,16 @@ output "task_subnet_ids" {
 output "scheduler_role_arn" {
   description = "IAM role assumed by EventBridge to RunTask."
   value       = module.eventbridge_scheduler.scheduler_role_arn
+}
+
+output "market_schedule_name" {
+  description = "Name of the daily market-open schedule."
+  value       = module.eventbridge_scheduler.schedule_name
+}
+
+output "refresh_schedule_name" {
+  description = "Name of the weekly backfill schedule."
+  value       = module.eventbridge_scheduler.refresh_schedule_name
 }
 
 output "rds_endpoint" {

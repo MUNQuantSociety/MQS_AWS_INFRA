@@ -1,26 +1,29 @@
 # Architecture
 
-Two workloads share one container image, one ECS cluster, and one RDS instance.
+Three workloads share one container image, one ECS cluster, and one RDS instance.
 
 ```
 GitHub Actions ──build──▶ ECR (mqsmaster)
                               │
-                   ┌──────────┴──────────────────────────────────────────┐
-                   ▼                                                     ▼
-ECS Service mqsmaster-prod-nlp           EventBridge Scheduler ──▶ ECS RunTask mqsmaster-prod
-  always-on Fargate                        cron @ 08:00 America/St_Johns   (market task, ephemeral)
-  desired_count = 1                        Mon–Fri                         start.sh (NLP stripped)
-  python NLP/main_NLP.py                                                   market scripts:
-                                                                            src/main.py
-                                                                            realtimeDataIngestor.py
-                                                                            pnl_script.py
-                                                                            refresh.py
-                                                                            rbp_runner.py
-                                                                          exits when market closes
-                              │
+        ┌─────────────────────┼──────────────────────────────┐
+        ▼                     ▼                              ▼
+ECS Service              EventBridge Scheduler          EventBridge Scheduler
+mqsmaster-prod-nlp         cron @ 08:00 Mon–Fri           cron @ 18:30 Fri
+  always-on Fargate        America/St_Johns               America/St_Johns
+  desired_count = 1              │                              │
+  NLP/main_NLP.py                ▼                              ▼
+                          RunTask mqsmaster-prod        RunTask mqsmaster-prod-refresh
+                            start.sh, NLP stripped        refresh.py --threads 4
+                            src/main.py                   exits when done
+                            realtimeDataIngestor.py
+                            pnl_script.py
+                            rbp_runner.py
+                            exits when market closes
+        └─────────────────────┼──────────────────────────────┘
                               ├── RDS PostgreSQL (private, task SG only)
                               ├── Secrets Manager (db creds, API keys)
-                              └── CloudWatch Logs (/ecs/mqsmaster-prod, streams: mqsmaster/*, nlp/*)
+                              └── CloudWatch Logs (/ecs/mqsmaster-prod)
+                                    streams: mqsmaster/*, nlp/*, refresh/*
 ```
 
 ## Workloads
@@ -29,6 +32,19 @@ ECS Service mqsmaster-prod-nlp           EventBridge Scheduler ──▶ ECS Run
 |---|---|---|---|
 | NLP service | `ecs-service-nlp` | Always-on ECS Service, restarts on crash | `python NLP/main_NLP.py` |
 | Market task | `ecs-task-market` | Ephemeral, EventBridge-triggered Mon–Fri | `start.sh` (NLP block stripped at runtime) |
+| Refresh task | `ecs-task-refresh` | Ephemeral, weekly Friday after close | `refresh.py --threads 4` |
+
+### Why `refresh.py` needs its own task definition
+
+`refresh.py` is **not** in `start.sh`'s `market_scripts` array, so the market task
+never runs it — before this module existed it was not scheduled anywhere. It lives
+at `src/orchestrator/backfill/update/refresh.py` as a standalone CLI with its own
+arguments, which is why `ecs-task-refresh` is a separate family rather than a
+`RunTask` override on the market family.
+
+`--threads` defaults to 4 and is bounded by `MQSDBConnector`'s
+`ThreadedConnectionPool(maxconn=6)` — the script documents this constraint on the
+argument itself. The module validates `refresh_threads` against that ceiling.
 
 ## Data flow
 
@@ -39,13 +55,22 @@ ECS Service mqsmaster-prod-nlp           EventBridge Scheduler ──▶ ECS Run
    role holds `secretsmanager:GetSecretValue`; the task role does not.
 3. **Database** — the RDS security group accepts Postgres traffic only from the
    Fargate task security group. There is no public endpoint.
-4. **Logs** — both workloads write to `/ecs/mqsmaster-prod`, separated by stream
-   prefix (`mqsmaster/*` vs `nlp/*`).
+4. **Logs** — all three workloads write to `/ecs/mqsmaster-prod`, separated by
+   stream prefix (`mqsmaster/*`, `nlp/*`, `refresh/*`).
+
+### Connection budget
+
+`MQSDBConnector` creates a `ThreadedConnectionPool(minconn=1, maxconn=6)` **per
+process**. During market hours that is 4 market processes + 1 NLP process = up to
+30 connections. The refresh task adds its own pool, but runs after the close when
+the market processes are gone. `db.t4g.medium` (4 GB) gives `max_connections`
+≈ 450, so there is ample room — worth rechecking if `db_instance_class` is ever
+reduced.
 
 ## Secret wiring
 
 `locals.tf` is the single source of truth for what ECS injects. Adding a key to
-`container_secrets` propagates it to both task definitions:
+`container_secrets` propagates it to all three task definitions:
 
 ```hcl
 container_secrets = concat(
@@ -69,14 +94,31 @@ RDS endpoint, so `db_secret_values.host` in `terraform.tfvars` is ignored.
 ## Scheduling
 
 Default path uses **EventBridge Scheduler** with the `America/St_Johns` IANA
-timezone, so the trigger fires at the same local clock time year-round across the
-NST/NDT transition. Setting `use_scheduler_timezone = false` falls back to a
-classic EventBridge Rule evaluated in UTC, which drifts by an hour at DST
+timezone, so triggers fire at the same local clock time year-round across the
+NST/NDT transition. Setting `use_scheduler_timezone = false` falls back to
+classic EventBridge Rules evaluated in UTC, which drift by an hour at DST
 boundaries.
 
-The scheduler targets the task definition **family** rather than a pinned
+| Schedule | Default cron | Local time |
+|---|---|---|
+| `mqsmaster-prod-market-open` | `cron(0 8 ? * MON-FRI *)` | Mon–Fri 08:00 |
+| `mqsmaster-prod-refresh` | `cron(30 18 ? * FRI *)` | Friday 18:30 |
+
+**Why 18:30 for the refresh.** Newfoundland is ET+1:30, so the 16:00 ET close
+lands at 17:30 local, and `start.sh`'s monitor loop polls `is_market_open` every
+180 s — the market task exits within ~3 minutes of the close. 18:30 leaves roughly
+an hour of margin, so the backfill never runs concurrently with live trading and
+competes for neither DB connections nor API rate limits. **This offset is
+timezone-specific**: changing `schedule_timezone` requires recomputing
+`refresh_schedule_expression`.
+
+Both schedules target the task definition **family** rather than a pinned
 revision, so a CI-registered revision is picked up by the next scheduled run
 without a Terraform apply.
+
+The refresh schedule retries (2 attempts, 1 h window) where the market schedule
+does not — a missed weekly job is otherwise seven days from its next attempt, and
+a late start outside market hours is harmless.
 
 ## Image caveats
 
@@ -100,3 +142,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl jq ca-cert
 values inside the container. The market task module writes a fresh `.env` from the
 ECS-injected secret environment variables **before** `start.sh` runs, so the
 source step picks up the correct credentials.
+
+This applies only to the market task. The NLP service and the refresh task invoke
+their Python entrypoints directly — no `start.sh`, so no `.env` materialisation
+and no `curl`/`jq` bootstrap. They read the injected environment as-is.

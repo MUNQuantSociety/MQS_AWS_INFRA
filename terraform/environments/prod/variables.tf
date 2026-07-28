@@ -138,6 +138,51 @@ variable "nlp_desired_count" {
 }
 
 ###############################################################################
+# Refresh task (weekly backfill, outside market hours)
+###############################################################################
+
+variable "refresh_task_cpu" {
+  description = <<EOT
+Fargate refresh task CPU units. refresh.py is I/O bound (HTTP fetches plus DB
+inserts), so 1 vCPU is ample.
+EOT
+  type        = string
+  default     = "1024"
+}
+
+variable "refresh_task_memory" {
+  description = "Fargate refresh task memory in MiB. Must form a valid Fargate CPU/memory pair."
+  type        = string
+  default     = "2048"
+}
+
+variable "refresh_threads" {
+  description = <<EOT
+Worker threads passed to refresh.py --threads.
+
+Must stay below MQSDBConnector's ThreadedConnectionPool(maxconn=6) -- refresh.py
+documents this constraint on the argument itself. 4 is the script's own default.
+EOT
+  type        = number
+  default     = 4
+}
+
+variable "refresh_exchange" {
+  description = "Exchange code passed to refresh.py --exchange."
+  type        = string
+  default     = "NYSE"
+}
+
+variable "refresh_extra_args" {
+  description = <<EOT
+Extra CLI arguments for refresh.py, e.g. ["--skip-backfill"]. Empty keeps the
+script's defaults (last 30 days, 1-minute bars, --on-conflict ignore).
+EOT
+  type        = list(string)
+  default     = []
+}
+
+###############################################################################
 # Logging
 ###############################################################################
 
@@ -159,6 +204,21 @@ Default fires Mon-Fri at 8:00 AM local in schedule_timezone.
 EOT
   type        = string
   default     = "cron(0 8 ? * MON-FRI *)"
+}
+
+variable "refresh_schedule_expression" {
+  description = <<EOT
+EventBridge cron expression for the weekly backfill, evaluated in
+schedule_timezone (or UTC when use_scheduler_timezone is false).
+
+Default fires Friday 18:30 local — a clear hour after the close. Newfoundland is
+ET+1:30, so 16:00 ET is 17:30 local, and start.sh's monitor loop polls every 180s,
+meaning the market task is gone within ~3 minutes of the close.
+
+Recompute this offset if schedule_timezone changes.
+EOT
+  type        = string
+  default     = "cron(30 18 ? * FRI *)"
 }
 
 variable "schedule_timezone" {
