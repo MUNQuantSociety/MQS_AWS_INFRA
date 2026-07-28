@@ -2,6 +2,10 @@
 
 Estimates for `us-east-2` at the default sizing in `variables.tf`.
 
+On-demand and storage unit rates below are `us-east-2` list prices as of **2026-07-28**
+(source: AWS pricing calculator rate maps and the EBS/VPC pricing pages). Rates are
+quoted inline next to each line so the arithmetic is auditable.
+
 ## Compute + supporting services
 
 | Component | Sizing | Cost/mo |
@@ -40,8 +44,109 @@ Setting `db_multi_az = true` roughly doubles the instance and storage lines.
 | Shorter log retention | `log_retention_days = 7` | ~$1/mo |
 | Disable storage autoscaling | `db_max_allocated_storage = db_allocated_storage` | caps unplanned growth |
 
-## Comparison
+## Comparison — standalone EC2 build
 
-A single always-on `t3.large` running both workloads plus a local Postgres is
-~$60/mo plus EBS — cheaper on paper, but with no per-workload scaling, no managed
-backups, no failover, and manual lifecycle management.
+A single always-on EC2 instance running both workloads plus a self-hosted Postgres.
+Recomputed 2026-07-28; the earlier `t3.large` / ~$60 figure in this doc was the raw
+on-demand price of an **undersized** box and is superseded by the numbers below.
+
+### Sizing envelope
+
+The box has to hold everything that is concurrently live during a market day:
+
+| Workload | Requested | Source |
+|---|---|---|
+| Market task | 2 vCPU / 8 GB | `market_task_cpu` / `market_task_memory` |
+| NLP service | 0.5 vCPU / 2 GB | `nlp_task_cpu` / `nlp_task_memory` |
+| Postgres (replacing `db.t4g.medium`) | 2 vCPU / 4 GB | `db_instance_class` |
+| OS + agents | — / ~1 GB | |
+| **Peak concurrent** | **~4.5 vCPU / ~15 GB** | |
+
+A `t3.large` is 2 vCPU / 8 GB — roughly **half** the required memory. The floor for a
+genuine single-box build is a 4 vCPU / 16 GB instance. vCPU is mildly oversubscribed
+(4.5 requested vs 4 available), which is tolerable because the Fargate values are
+allocation ceilings rather than sustained draw.
+
+### Instance options at that envelope
+
+| Instance | Sizing | $/h | $/mo (730 h) | Note |
+|---|---|---|---|---|
+| `t3.xlarge` | 4 vCPU / 16 GB | $0.1664 | ~$121 | Burstable — see below |
+| `m7g.xlarge` | 4 vCPU / 16 GB (Graviton) | $0.1632 | ~$119 | Needs an `arm64` image build |
+| `m7i.xlarge` | 4 vCPU / 16 GB (x86) | $0.2016 | ~$147 | Matches today's `amd64` CI build |
+| `m8g.xlarge` | 4 vCPU / 16 GB (Graviton) | $0.1795 | ~$131 | Newer gen, `arm64` |
+
+On burstable: `t3.xlarge` baseline is 40% of 4 vCPU = 1.6 vCPU sustained. Average draw
+is roughly 878 vCPU-h/mo (market 2 × 147 h, NLP 0.5 × 730 h, Postgres ~0.3 × 730 h)
+against a 1,168 vCPU-h baseline allowance, and the idle overnight hours refill credits
+faster than a 7-hour market run drains them. So T3 Unlimited should cost ~$0 in steady
+state — but a long or heavy run that empties the balance bills the surcharge
+($0.05/vCPU-h, Linux), and that is a real line item, not a footnote.
+
+`m7g.xlarge` is the cheapest option that is not burstable, but `MQSMaster/Dockerfile`
+is built `amd64` by CI today; Graviton requires a multi-arch build first. The costed
+default below is therefore `m7i.xlarge`.
+
+### Full standalone bill (`m7i.xlarge`)
+
+| Component | Sizing | Rate | Cost/mo |
+|---|---|---|---|
+| EC2 on-demand | `m7i.xlarge`, 730 h — always-on, the NLP service means it can't be stopped | $0.2016/h | ~$147 |
+| EBS gp3 — root | 30 GB | $0.08/GB-mo | ~$2.40 |
+| EBS gp3 — Postgres data | 100 GB (matches `db_allocated_storage`) | $0.08/GB-mo | ~$8.00 |
+| EBS snapshots | ~130–150 GB effective, 7-day retention | $0.05/GB-mo | ~$6–8 |
+| Public IPv4 | 1 address × 730 h | $0.005/h | ~$3.65 |
+| ECR storage | unchanged, if still container-based | | ~$0.10 |
+| Secrets Manager | 2 secrets × $0.40 | | $0.80 |
+| CloudWatch Logs | volume-dependent, plus CW agent on the box | | ~$2–3 |
+| **Total** | | | **~$170–175/mo** |
+
+gp3 includes 3,000 IOPS and 125 MB/s at no extra charge, so no provisioned-performance
+line is needed at this size.
+
+On Graviton (`m7g.xlarge`) the same build lands at **~$143/mo**; on `t3.xlarge`,
+**~$145/mo** assuming the credit balance holds.
+
+### The headline
+
+**A standalone EC2 build is not cheaper.** ~$170/mo (or ~$143 on Graviton) against
+**~$100–120/mo** for the current Fargate + RDS stack. The saving implied by the old
+`t3.large` line only existed because the box was sized to about half the workload.
+The structural reason: Fargate bills the market task for ~147 h/mo, while a single
+box has to stay up 730 h/mo for the always-on NLP service.
+
+### Where EC2 does win
+
+Split the single box in two — a small always-on instance for NLP + Postgres, and a
+larger instance started and stopped around the ~147 market hours:
+
+| Component | Sizing | Cost/mo |
+|---|---|---|
+| Always-on box (NLP + Postgres) | `t3.large`, 730 h @ $0.0832/h | ~$61 |
+| Market box (start/stop) | `t3.large`, ~147 h @ $0.0832/h | ~$12 |
+| EBS gp3 + snapshots | 130 GB + snapshots | ~$16 |
+| IPv4 × 2, ECR, Secrets, Logs | | ~$11 |
+| **Total** | | **~$100/mo** |
+
+That reaches rough **parity** with Fargate + RDS, not a clear win — and it is no longer
+a standalone single-box build. It also adds start/stop orchestration that EventBridge +
+Fargate gives for free.
+
+### What you give up
+
+Independent of price, the standalone build loses:
+
+- **No per-workload scaling** — one box, one failure domain, one resize decision
+- **No managed backups or PITR** — `pg_dump`/snapshots on a cron you own
+- **No failover** — `db_multi_az` has no equivalent; an AZ loss is an outage
+- **Manual lifecycle** — OS patching, Postgres upgrades, disk growth, log rotation
+- **No task isolation** — a market-task OOM can take down the NLP service and the DB
+
+### Levers on the standalone build
+
+| Lever | Change | Saving |
+|---|---|---|
+| Graviton | multi-arch image, `m7g.xlarge` | ~$28/mo |
+| 1-year Compute Savings Plan | commit to the always-on box | ~35–40% of the EC2 line (approximate — verify current SP rates) |
+| SSM Parameter Store | replace Secrets Manager | ~$0.80/mo |
+| Drop the public IPv4 | private subnet + SSM Session Manager | **negative** — needs a NAT gateway (~$33/mo) or interface endpoints (~$21/mo); the $3.65 public IP is the cheap path |
