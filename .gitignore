@@ -13,7 +13,7 @@ override.tf.json
 *_override.tf.json
 .terraformrc
 terraform.rc
-
+plan
 # Env
 .env
 *.env
