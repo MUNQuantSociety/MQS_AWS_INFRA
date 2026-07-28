@@ -48,7 +48,7 @@ Setting `db_multi_az = true` roughly doubles the instance and storage lines.
 
 ## Total
 
-**~$133–153/mo** at defaults (compute ~$30–37, networking ~$33, database ~$67–82).
+**~$130–152/mo** at defaults (compute ~$30–37, networking ~$33, database ~$67–82).
 RDS still dominates at roughly half the bill; the NAT gateway is the next single
 largest line.
 

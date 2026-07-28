@@ -76,7 +76,7 @@ Adding an environment is a directory copy — see
 ## Quickstart
 
 ```bash
-cd terraform/environments/prod && cp terraform.tfvars.example terraform.tfvars && terraform init && terraform plan
+cd terraform/environments/prod && cp terraform.tfvars.example terraform.tfvars && terraform init -upgrade && terraform plan
 ```
 
 Full deploy steps in [docs/operations.md](docs/operations.md#deploy).

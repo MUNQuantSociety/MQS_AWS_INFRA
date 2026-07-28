@@ -6,6 +6,18 @@ environment         = "prod"
 ecr_repository_name = "mqsmaster"
 image_tag           = "latest"
 
+# Networking. Defaults build a dedicated VPC: workloads in private subnets,
+# IGW + one NAT gateway in the public subnets. All optional - omit to accept
+# the defaults below.
+#
+# single_nat_gateway is the main cost lever here: true = one NAT (~$32/mo),
+# false = one per AZ (~$97/mo) for HA egress.
+vpc_cidr             = "10.0.0.0/16"
+az_count             = 3
+private_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"] # tasks + RDS
+public_subnet_cidrs  = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"] # IGW + NAT only
+single_nat_gateway   = true
+
 # Market task (scheduled, Mon-Fri).
 market_task_cpu    = "2048" # 2 vCPU
 market_task_memory = "8192" # 8 GB
