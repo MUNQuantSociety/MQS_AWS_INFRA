@@ -14,8 +14,6 @@ env:
   NLP_TASK_FAMILY: mqsmaster-prod-nlp
   NLP_CONTAINER_NAME: mqsmaster-nlp
   NLP_SERVICE_NAME: mqsmaster-prod-nlp
-  REFRESH_TASK_FAMILY: mqsmaster-prod-refresh
-  REFRESH_CONTAINER_NAME: mqsmaster-refresh
 
 permissions:
   id-token: write
@@ -82,32 +80,6 @@ jobs:
             --cli-input-json file://${{ steps.render-market.outputs.task-definition }} \
             > /dev/null
           echo "Registered new revision for ${MARKET_TASK_FAMILY}"
-
-      # --- Refresh task: register new revision. Like the market task, the weekly
-      # --- schedule targets the family (unpinned revision), so Friday's run picks
-      # --- up whatever was last registered. Without this step the family would
-      # --- stay pinned to the image it was created with.
-      - name: Download refresh task definition
-        run: |
-          aws ecs describe-task-definition \
-            --task-definition "${REFRESH_TASK_FAMILY}" \
-            --query 'taskDefinition' \
-            > refresh-task-def.json
-
-      - name: Render refresh task definition
-        id: render-refresh
-        uses: aws-actions/amazon-ecs-render-task-definition@v1
-        with:
-          task-definition: refresh-task-def.json
-          container-name: ${{ env.REFRESH_CONTAINER_NAME }}
-          image: ${{ steps.build.outputs.image_uri }}
-
-      - name: Register refresh task revision
-        run: |
-          aws ecs register-task-definition \
-            --cli-input-json file://${{ steps.render-refresh.outputs.task-definition }} \
-            > /dev/null
-          echo "Registered new revision for ${REFRESH_TASK_FAMILY}"
 
       # --- NLP service: register new revision AND update the service so the
       # --- always-on task restarts onto the new image.

@@ -79,23 +79,6 @@ module "ecs_task_market" {
   aws_region              = var.aws_region
 }
 
-module "ecs_task_refresh" {
-  source = "../../modules/ecs-task-refresh"
-
-  name_prefix             = local.name_prefix
-  image_uri               = local.image_uri
-  task_cpu                = var.refresh_task_cpu
-  task_memory             = var.refresh_task_memory
-  refresh_threads         = var.refresh_threads
-  refresh_exchange        = var.refresh_exchange
-  refresh_extra_args      = var.refresh_extra_args
-  task_execution_role_arn = module.iam_roles.task_execution_role_arn
-  task_role_arn           = module.iam_roles.task_role_arn
-  container_secrets       = local.container_secrets
-  log_group_name          = module.cloudwatch_logs.log_group_name
-  aws_region              = var.aws_region
-}
-
 module "ecs_service_nlp" {
   source = "../../modules/ecs-service-nlp"
 
@@ -117,18 +100,14 @@ module "ecs_service_nlp" {
 module "eventbridge_scheduler" {
   source = "../../modules/eventbridge-scheduler"
 
-  name_prefix                 = local.name_prefix
-  schedule_expression         = var.schedule_expression
-  refresh_schedule_expression = var.refresh_schedule_expression
-  schedule_timezone           = var.schedule_timezone
-  use_scheduler_timezone      = var.use_scheduler_timezone
-  cluster_arn                 = module.ecs_cluster.cluster_arn
-
-  task_definition_arn_without_revision         = module.ecs_task_market.task_definition_arn_without_revision
-  refresh_task_definition_arn_without_revision = module.ecs_task_refresh.task_definition_arn_without_revision
-
-  task_execution_role_arn = module.iam_roles.task_execution_role_arn
-  task_role_arn           = module.iam_roles.task_role_arn
-  subnet_ids              = module.networking.subnet_ids
-  security_group_id       = module.networking.task_security_group_id
+  name_prefix                          = local.name_prefix
+  schedule_expression                  = var.schedule_expression
+  schedule_timezone                    = var.schedule_timezone
+  use_scheduler_timezone               = var.use_scheduler_timezone
+  cluster_arn                          = module.ecs_cluster.cluster_arn
+  task_definition_arn_without_revision = module.ecs_task_market.task_definition_arn_without_revision
+  task_execution_role_arn              = module.iam_roles.task_execution_role_arn
+  task_role_arn                        = module.iam_roles.task_role_arn
+  subnet_ids                           = module.networking.subnet_ids
+  security_group_id                    = module.networking.task_security_group_id
 }

@@ -16,16 +16,13 @@ terraform apply
 Outputs after apply:
 
 ```
-ecr_repository_url             = "<acct>.dkr.ecr.us-east-2.amazonaws.com/mqsmaster"
-ecs_cluster_name               = "mqsmaster-prod-cluster"
-market_task_definition_family  = "mqsmaster-prod"
-refresh_task_definition_family = "mqsmaster-prod-refresh"
-nlp_task_definition_family     = "mqsmaster-prod-nlp"
-nlp_service_name               = "mqsmaster-prod-nlp"
-market_schedule_name           = "mqsmaster-prod-market-open"
-refresh_schedule_name          = "mqsmaster-prod-refresh"
-log_group_name                 = "/ecs/mqsmaster-prod"
-rds_endpoint                   = "<id>.<region>.rds.amazonaws.com:5432"
+ecr_repository_url            = "<acct>.dkr.ecr.us-east-2.amazonaws.com/mqsmaster"
+ecs_cluster_name              = "mqsmaster-prod-cluster"
+market_task_definition_family = "mqsmaster-prod"
+nlp_task_definition_family    = "mqsmaster-prod-nlp"
+nlp_service_name              = "mqsmaster-prod-nlp"
+log_group_name                = "/ecs/mqsmaster-prod"
+rds_endpoint                  = "<id>.<region>.rds.amazonaws.com:5432"
 ```
 
 ## First image push
@@ -42,39 +39,11 @@ aws ecr get-login-password --region us-east-2 | docker login --username AWS --pa
 cd ../MQSMaster && docker build -t mqsmaster:latest . && docker tag mqsmaster:latest <acct>.dkr.ecr.us-east-2.amazonaws.com/mqsmaster:latest && docker push <acct>.dkr.ecr.us-east-2.amazonaws.com/mqsmaster:latest
 ```
 
-## Manually trigger a scheduled task
-
-Market task:
+## Manually trigger the market task
 
 ```bash
 aws ecs run-task --cluster $(terraform output -raw ecs_cluster_name) --task-definition $(terraform output -raw market_task_definition_family) --launch-type FARGATE --network-configuration "awsvpcConfiguration={subnets=[$(terraform output -json task_subnet_ids | jq -r 'join(",")')],securityGroups=[$(terraform output -raw task_security_group_id)],assignPublicIp=ENABLED}"
 ```
-
-Refresh task — useful for verifying the backfill without waiting for Friday:
-
-```bash
-aws ecs run-task --cluster $(terraform output -raw ecs_cluster_name) --task-definition $(terraform output -raw refresh_task_definition_family) --launch-type FARGATE --network-configuration "awsvpcConfiguration={subnets=[$(terraform output -json task_subnet_ids | jq -r 'join(",")')],securityGroups=[$(terraform output -raw task_security_group_id)],assignPublicIp=ENABLED}"
-```
-
-For a dry run that fetches but does not insert, override the command:
-
-```bash
-aws ecs run-task --cluster $(terraform output -raw ecs_cluster_name) --task-definition $(terraform output -raw refresh_task_definition_family) --launch-type FARGATE --network-configuration "awsvpcConfiguration={subnets=[$(terraform output -json task_subnet_ids | jq -r 'join(",")')],securityGroups=[$(terraform output -raw task_security_group_id)],assignPublicIp=ENABLED}" --overrides '{"containerOverrides":[{"name":"mqsmaster-refresh","command":["src/orchestrator/backfill/update/refresh.py","--threads","4","--dry-run"]}]}'
-```
-
-## Changing refresh arguments
-
-`refresh_threads`, `refresh_exchange` and `refresh_extra_args` live inside
-`container_definitions`, which carries `ignore_changes` so CI-registered
-revisions are not clobbered. That block also suppresses these edits. To apply one:
-
-1. Comment out the `lifecycle { ignore_changes = [container_definitions] }` block
-   in `modules/ecs-task-refresh/main.tf`.
-2. `terraform apply` — registers a new revision.
-3. Restore the `lifecycle` block.
-
-The schedule targets the family, so Friday's run picks up the new revision with no
-further action.
 
 ## Logs
 
@@ -82,16 +51,10 @@ further action.
 aws logs tail /ecs/mqsmaster-prod --since 1h --follow
 ```
 
-Filter to one workload by stream prefix (`mqsmaster`, `nlp`, or `refresh`):
+Filter to one workload by stream prefix:
 
 ```bash
 aws logs tail /ecs/mqsmaster-prod --log-stream-name-prefix nlp --since 1h --follow
-```
-
-Check last Friday's backfill:
-
-```bash
-aws logs tail /ecs/mqsmaster-prod --log-stream-name-prefix refresh --since 7d
 ```
 
 ## Rotating secrets
@@ -116,28 +79,16 @@ aws ecs update-service --cluster mqsmaster-prod-cluster --service mqsmaster-prod
 Override in `terraform.tfvars`:
 
 ```hcl
-schedule_expression         = "cron(0 11 ? * MON-FRI *)"  # market open, Mon–Fri
-refresh_schedule_expression = "cron(30 18 ? * FRI *)"     # weekly backfill, Friday
-schedule_timezone           = "America/St_Johns"
-use_scheduler_timezone      = true
+schedule_expression    = "cron(0 11 ? * MON-FRI *)"
+schedule_timezone      = "America/St_Johns"
+use_scheduler_timezone = true
 ```
 
-**Do not move the market cron earlier than the open.** `start.sh` evaluates
+**Do not move this earlier than the market open.** `start.sh` evaluates
 `is_market_open` on the first iteration of its monitor loop, immediately after
 launching the market scripts — if the market is not open yet it SIGTERMs all of
 them and exits. 11:00 `America/St_Johns` is the 09:30 ET open, since Newfoundland
 runs ET+1:30.
-
-The refresh default sits ~1 h after the 16:00 ET close (17:30 local), so the
-backfill never overlaps live trading. **If you change `schedule_timezone`,
-recompute both expressions** — each offset is timezone-specific.
-
-To move the backfill to a different day, change `FRI` (e.g. `SAT` for Saturday
-morning, when there is no market activity at all):
-
-```hcl
-refresh_schedule_expression = "cron(0 6 ? * SAT *)"
-```
 
 ## Adding a new environment
 

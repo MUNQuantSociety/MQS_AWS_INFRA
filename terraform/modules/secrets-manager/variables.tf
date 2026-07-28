@@ -6,7 +6,7 @@ variable "name_prefix" {
 variable "recovery_window_in_days" {
   description = "Days secret remains recoverable after deletion. 0 disables recovery."
   type        = number
-  default     = 7
+  default     = 3
 }
 
 variable "db_secret_values" {
