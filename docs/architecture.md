@@ -3,7 +3,7 @@
 Two workloads share one container image, one ECS cluster, and one RDS instance.
 
 ```
-GitHub Actions ──build──▶ ECR (mqsmaster)
+GitHub Actions ──build──▶ ECR (livetradingbot)
                               │
                    ┌──────────┴──────────────────────────────────────────┐
                    ▼                                                     ▼

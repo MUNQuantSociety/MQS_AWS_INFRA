@@ -16,7 +16,7 @@ terraform apply
 Outputs after apply:
 
 ```
-ecr_repository_url            = "<acct>.dkr.ecr.us-east-2.amazonaws.com/mqsmaster"
+ecr_repository_url            = "<acct>.dkr.ecr.us-east-2.amazonaws.com/livetradingbot"
 ecs_cluster_name              = "mqsmaster-prod-cluster"
 market_task_definition_family = "mqsmaster-prod"
 nlp_task_definition_family    = "mqsmaster-prod-nlp"
@@ -27,17 +27,29 @@ rds_endpoint                  = "<id>.<region>.rds.amazonaws.com:5432"
 
 ## First image push
 
-Terraform creates an empty ECR repo. Tasks fail with `CannotPullContainerError`
-until the first image lands. Either merge to `main` and let CI push, or push
-manually:
+Terraform adopts the existing `livetradingbot` repo rather than creating it, so
+images already present stay put. Tasks still fail with `CannotPullContainerError`
+if `image_tag` names a tag that is not in the repo — the tag is resolved by ECS at
+task start, not by Terraform, so a bad value applies cleanly and only breaks at
+runtime.
+
+Either merge to `main` and let CI push, or push manually:
 
 ```bash
 aws ecr get-login-password --region us-east-2 | docker login --username AWS --password-stdin <acct>.dkr.ecr.us-east-2.amazonaws.com
 ```
 
 ```bash
-cd ../MQSMaster && docker build -t mqsmaster:latest . && docker tag mqsmaster:latest <acct>.dkr.ecr.us-east-2.amazonaws.com/mqsmaster:latest && docker push <acct>.dkr.ecr.us-east-2.amazonaws.com/mqsmaster:latest
+cd ../MQSMaster && docker build -t livetradingbot:1.0.5-5 . && docker tag livetradingbot:1.0.5-5 <acct>.dkr.ecr.us-east-2.amazonaws.com/livetradingbot:1.0.5-5 && docker push <acct>.dkr.ecr.us-east-2.amazonaws.com/livetradingbot:1.0.5-5
 ```
+
+Then set `image_tag` in `terraform.tfvars` to the tag you just pushed
+(`1.0.5-5` above) and re-apply. It is currently pinned to `1.0.5-4`; pushing a
+new tag without bumping this deploys the old image.
+
+Note this only governs the *first* revision of each task definition — both the
+market and NLP families carry `ignore_changes = [container_definitions]`, so
+after that CI re-registration is what moves the image.
 
 ## Manually trigger the market task
 

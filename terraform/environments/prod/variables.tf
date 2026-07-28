@@ -25,15 +25,28 @@ variable "environment" {
 ###############################################################################
 
 variable "ecr_repository_name" {
-  description = "Name of the ECR repository for the MQSMaster container image."
+  description = <<EOT
+Name of the existing ECR repository holding the MQSMaster container image.
+
+The repository is NOT created by Terraform -- it predates this config and is
+adopted via a data source (see modules/ecr-repository). It must already exist in
+aws_region, or plan fails with RepositoryNotFoundException.
+EOT
   type        = string
-  default     = "mqsmaster"
+  default     = "livetradingbot"
 }
 
 variable "image_tag" {
-  description = "Image tag to deploy. CI/CD bumps this; Terraform ignores drift via lifecycle."
+  description = <<EOT
+Image tag to deploy. Must be a tag that already exists in ecr_repository_name --
+ECS resolves it at task start, so a missing tag surfaces as
+CannotPullContainerError rather than a Terraform error.
+
+Pinned to a semantic tag rather than "latest": the repository is tagged
+1.0.5-<n> and carries no "latest" tag. Bump this on each release.
+EOT
   type        = string
-  default     = "latest"
+  default     = "1.0.5-4"
 }
 
 ###############################################################################

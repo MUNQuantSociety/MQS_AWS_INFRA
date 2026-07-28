@@ -1,18 +1,24 @@
-resource "aws_ecr_repository" "this" {
-  name                 = var.repository_name
-  image_tag_mutability = "MUTABLE"
+###############################################################################
+# The image repository predates this Terraform config, so it is adopted rather
+# than created: creating it would fail with RepositoryAlreadyExistsException.
+#
+# Consequence of using a data source: Terraform does NOT manage the repository's
+# own settings (scan_on_push, encryption, tag mutability). Those stay whatever
+# they were set to out-of-band. Only the lifecycle policy below is managed here.
+#
+# To bring the repository fully under Terraform instead, replace this with the
+# original `resource "aws_ecr_repository" "this"` and run:
+#   terraform import module.ecr_repository.aws_ecr_repository.this <repo-name>
+###############################################################################
 
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-
-  encryption_configuration {
-    encryption_type = "AES256"
-  }
+data "aws_ecr_repository" "this" {
+  name = var.repository_name
 }
 
+# Additive: the repository carried no lifecycle policy before this config, so
+# applying it expires nothing that exists today (3 images vs a retention of 10).
 resource "aws_ecr_lifecycle_policy" "this" {
-  repository = aws_ecr_repository.this.name
+  repository = data.aws_ecr_repository.this.name
 
   policy = jsonencode({
     rules = [
