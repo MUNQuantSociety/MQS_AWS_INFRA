@@ -1,26 +1,26 @@
 ###############################################################################
-# Root composition: wires every module together.
+# Root composition for the prod environment: wires every module together.
 ###############################################################################
 
-module "ecr" {
-  source = "./modules/ecr"
+module "ecr_repository" {
+  source = "../../modules/ecr-repository"
 
   repository_name = var.ecr_repository_name
 }
 
-module "network" {
-  source = "./modules/network"
+module "networking" {
+  source = "../../modules/networking"
 
   name_prefix = local.name_prefix
 }
 
-module "rds" {
-  source = "./modules/rds"
+module "rds_postgres" {
+  source = "../../modules/rds-postgres"
 
   name_prefix            = local.name_prefix
-  vpc_id                 = module.network.vpc_id
-  subnet_ids             = module.network.subnet_ids
-  task_security_group_id = module.network.task_security_group_id
+  vpc_id                 = module.networking.vpc_id
+  subnet_ids             = module.networking.subnet_ids
+  task_security_group_id = module.networking.task_security_group_id
 
   db_username = var.db_secret_values.db_user
   db_password = var.db_secret_values.password
@@ -37,77 +37,77 @@ module "rds" {
   skip_final_snapshot     = var.db_skip_final_snapshot
 }
 
-module "secrets" {
-  source = "./modules/secrets"
+module "secrets_manager" {
+  source = "../../modules/secrets-manager"
 
   name_prefix       = local.name_prefix
   db_secret_values  = local.db_secret_values
   api_secret_values = var.api_secret_values
 }
 
-module "iam" {
-  source = "./modules/iam"
+module "iam_roles" {
+  source = "../../modules/iam-roles"
 
   name_prefix = local.name_prefix
-  secret_arns = [module.secrets.db_secret_arn, module.secrets.api_secret_arn]
+  secret_arns = [module.secrets_manager.db_secret_arn, module.secrets_manager.api_secret_arn]
 }
 
-module "logging" {
-  source = "./modules/logging"
+module "cloudwatch_logs" {
+  source = "../../modules/cloudwatch-logs"
 
   log_group_name    = local.log_group
   retention_in_days = var.log_retention_days
 }
 
 module "ecs_cluster" {
-  source = "./modules/ecs_cluster"
+  source = "../../modules/ecs-cluster"
 
   name_prefix = local.name_prefix
 }
 
-module "market_task" {
-  source = "./modules/market_task"
+module "ecs_task_market" {
+  source = "../../modules/ecs-task-market"
 
   name_prefix             = local.name_prefix
   image_uri               = local.image_uri
   task_cpu                = var.market_task_cpu
   task_memory             = var.market_task_memory
-  task_execution_role_arn = module.iam.task_execution_role_arn
-  task_role_arn           = module.iam.task_role_arn
+  task_execution_role_arn = module.iam_roles.task_execution_role_arn
+  task_role_arn           = module.iam_roles.task_role_arn
   container_secrets       = local.container_secrets
-  log_group_name          = module.logging.log_group_name
+  log_group_name          = module.cloudwatch_logs.log_group_name
   aws_region              = var.aws_region
 }
 
-module "nlp_service" {
-  source = "./modules/nlp_service"
+module "ecs_service_nlp" {
+  source = "../../modules/ecs-service-nlp"
 
   name_prefix             = local.name_prefix
   image_uri               = local.image_uri
   task_cpu                = var.nlp_task_cpu
   task_memory             = var.nlp_task_memory
   desired_count           = var.nlp_desired_count
-  task_execution_role_arn = module.iam.task_execution_role_arn
-  task_role_arn           = module.iam.task_role_arn
+  task_execution_role_arn = module.iam_roles.task_execution_role_arn
+  task_role_arn           = module.iam_roles.task_role_arn
   cluster_id              = module.ecs_cluster.cluster_id
-  subnet_ids              = module.network.subnet_ids
-  security_group_id       = module.network.task_security_group_id
+  subnet_ids              = module.networking.subnet_ids
+  security_group_id       = module.networking.task_security_group_id
   container_secrets       = local.container_secrets
-  log_group_name          = module.logging.log_group_name
+  log_group_name          = module.cloudwatch_logs.log_group_name
   aws_region              = var.aws_region
 }
 
-module "scheduler" {
-  source = "./modules/scheduler"
+module "eventbridge_scheduler" {
+  source = "../../modules/eventbridge-scheduler"
 
   name_prefix                          = local.name_prefix
   schedule_expression                  = var.schedule_expression
   schedule_timezone                    = var.schedule_timezone
   use_scheduler_timezone               = var.use_scheduler_timezone
   cluster_arn                          = module.ecs_cluster.cluster_arn
-  task_definition_arn_without_revision = module.market_task.task_definition_arn_without_revision
-  task_execution_role_arn              = module.iam.task_execution_role_arn
-  task_role_arn                        = module.iam.task_role_arn
-  subnet_ids                           = module.network.subnet_ids
-  security_group_id                    = module.network.task_security_group_id
+  task_definition_arn_without_revision = module.ecs_task_market.task_definition_arn_without_revision
+  task_execution_role_arn              = module.iam_roles.task_execution_role_arn
+  task_role_arn                        = module.iam_roles.task_role_arn
+  subnet_ids                           = module.networking.subnet_ids
+  security_group_id                    = module.networking.task_security_group_id
 }
