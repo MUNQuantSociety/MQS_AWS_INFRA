@@ -8,10 +8,14 @@ configured AWS profile in `us-east-2`.
 ```bash
 cd terraform/environments/prod
 cp terraform.tfvars.example terraform.tfvars   # fill real secret values
-terraform init
+terraform init -upgrade                        # -upgrade required: AWS provider is now ~> 6.28
 terraform plan
 terraform apply
 ```
+
+> The AWS provider constraint moved from `~> 5.60` to `~> 6.28` when the VPC
+> module was adopted. A workspace initialised before that has a lockfile pinned
+> to 5.x and `plan` will refuse until `terraform init -upgrade` is run once.
 
 Outputs after apply:
 
@@ -42,8 +46,13 @@ cd ../MQSMaster && docker build -t mqsmaster:latest . && docker tag mqsmaster:la
 ## Manually trigger the market task
 
 ```bash
-aws ecs run-task --cluster $(terraform output -raw ecs_cluster_name) --task-definition $(terraform output -raw market_task_definition_family) --launch-type FARGATE --network-configuration "awsvpcConfiguration={subnets=[$(terraform output -json task_subnet_ids | jq -r 'join(",")')],securityGroups=[$(terraform output -raw task_security_group_id)],assignPublicIp=ENABLED}"
+aws ecs run-task --cluster $(terraform output -raw ecs_cluster_name) --task-definition $(terraform output -raw market_task_definition_family) --launch-type FARGATE --network-configuration "awsvpcConfiguration={subnets=[$(terraform output -json task_subnet_ids | jq -r 'join(",")')],securityGroups=[$(terraform output -raw task_security_group_id)],assignPublicIp=DISABLED}"
 ```
+
+`assignPublicIp` **must be `DISABLED`**. `task_subnet_ids` now returns private
+subnets, and Fargate rejects a task that asks for a public IP in a subnet with no
+route to an internet gateway. Egress still works — it goes out via the NAT
+gateway.
 
 ## Logs
 
