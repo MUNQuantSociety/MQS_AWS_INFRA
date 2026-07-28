@@ -2,10 +2,6 @@
 
 Estimates for `us-east-2` at the default sizing in `variables.tf`.
 
-On-demand and storage unit rates below are `us-east-2` list prices as of **2026-07-28**
-(source: AWS pricing calculator rate maps and the EBS/VPC pricing pages). Rates are
-quoted inline next to each line so the arithmetic is auditable.
-
 ## Compute + supporting services
 
 | Component | Sizing | Cost/mo |
@@ -49,6 +45,11 @@ Setting `db_multi_az = true` roughly doubles the instance and storage lines.
 A single always-on EC2 instance running both workloads plus a self-hosted Postgres.
 Recomputed 2026-07-28; the earlier `t3.large` / ~$60 figure in this doc was the raw
 on-demand price of an **undersized** box and is superseded by the numbers below.
+
+Unit rates **in this section** are `us-east-2` list prices verified 2026-07-28 (AWS
+pricing calculator rate maps, EBS and VPC pricing pages), quoted inline next to each
+line so the arithmetic is auditable. The Fargate and RDS sections above were not
+re-verified in this pass.
 
 ### Sizing envelope
 
@@ -102,7 +103,9 @@ default below is therefore `m7i.xlarge`.
 | **Total** | | | **~$170–175/mo** |
 
 gp3 includes 3,000 IOPS and 125 MB/s at no extra charge, so no provisioned-performance
-line is needed at this size.
+line is needed at this size. The snapshot line assumes the data volume is largely full;
+EBS snapshots bill incrementally on *used* blocks, so a mostly-empty 100 GB volume
+snapshots for considerably less.
 
 On Graviton (`m7g.xlarge`) the same build lands at **~$143/mo**; on `t3.xlarge`,
 **~$145/mo** assuming the credit balance holds.
@@ -122,15 +125,24 @@ larger instance started and stopped around the ~147 market hours:
 
 | Component | Sizing | Cost/mo |
 |---|---|---|
-| Always-on box (NLP + Postgres) | `t3.large`, 730 h @ $0.0832/h | ~$61 |
-| Market box (start/stop) | `t3.large`, ~147 h @ $0.0832/h | ~$12 |
-| EBS gp3 + snapshots | 130 GB + snapshots | ~$16 |
+| Always-on box (NLP + Postgres) | `t3.large` (2 vCPU / 8 GB), 730 h @ $0.0832/h | ~$61 |
+| Market box (start/stop) | `t3.xlarge` (4 vCPU / 16 GB), ~147 h @ $0.1664/h | ~$24 |
+| EBS gp3 + snapshots | 130 GB + snapshots | ~$17 |
 | IPv4 × 2, ECR, Secrets, Logs | | ~$11 |
-| **Total** | | **~$100/mo** |
+| **Total** | | **~$113/mo** |
 
-That reaches rough **parity** with Fargate + RDS, not a clear win — and it is no longer
-a standalone single-box build. It also adds start/stop orchestration that EventBridge +
-Fargate gives for free.
+Apply the same sizing discipline here as above. The market task alone requests
+2 vCPU / **8 GB**, so with ~1 GB of OS overhead a `t3.large` market box does not fit —
+`t3.xlarge` is the honest floor, which is why that row is $24 and not $12. The
+always-on box is also oversubscribed: NLP 0.5 + Postgres 2 = 2.5 vCPU on 2 vCPU, and
+7 GB of 8 GB memory. Tolerable, but with no headroom. On Graviton an `r7g.large`
+(2 vCPU / 16 GB, $0.1071/h) is a better market box at ~$16, at the cost of an `arm64`
+build — and mixing arches across the two boxes means maintaining two image builds.
+
+So even in its best variant the split lands **inside** the $100–120 Fargate + RDS range
+rather than under it: EC2 does not beat the managed stack here, it matches it. It is
+also no longer a standalone single-box build, and it adds start/stop orchestration that
+EventBridge + Fargate gives for free.
 
 ### What you give up
 
@@ -148,5 +160,6 @@ Independent of price, the standalone build loses:
 |---|---|---|
 | Graviton | multi-arch image, `m7g.xlarge` | ~$28/mo |
 | 1-year Compute Savings Plan | commit to the always-on box | ~35–40% of the EC2 line (approximate — verify current SP rates) |
+| | *Does not flip the comparison: Fargate has Compute Savings Plans and RDS has Reserved Instances, and the $100–120 baseline above includes neither.* | |
 | SSM Parameter Store | replace Secrets Manager | ~$0.80/mo |
 | Drop the public IPv4 | private subnet + SSM Session Manager | **negative** — needs a NAT gateway (~$33/mo) or interface endpoints (~$21/mo); the $3.65 public IP is the cheap path |
