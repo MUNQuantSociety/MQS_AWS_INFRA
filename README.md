@@ -92,7 +92,7 @@ Full deploy steps in [docs/operations.md](docs/operations.md#deploy).
 | **Secrets Manager** | DB credentials and API keys, injected by ECS at task start |
 | **CloudWatch Logs** | Single log group for both workloads, split by stream prefix |
 | **IAM** | Task execution role, task role, scheduler invoke role |
-| **VPC / EC2 networking** | Purpose-built VPC: private subnets for all workloads, public subnets for the IGW + a single NAT gateway, free S3 gateway endpoint, two managed security groups |
+| **VPC / EC2 networking** | Purpose-built VPC: private subnets for all workloads, public subnets for the IGW + a fck-nat NAT instance (ASG of 1 behind a static ENI, ~$7.50/mo vs ~$33 for a managed gateway), free S3 gateway endpoint, three managed security groups |
 
 ## Future work
 
@@ -100,5 +100,7 @@ Full deploy steps in [docs/operations.md](docs/operations.md#deploy).
 - Add a stop-task schedule as a safety net if `is_market_open` stays true past close.
 - CloudWatch Alarm + SNS on `ECSTaskStateChange` failures.
 - FARGATE_SPOT for the NLP service (~70% cheaper, tolerates restarts).
-- Second NAT gateway for HA egress (`single_nat_gateway = false`, ~+$32/mo) if
-  the batch workload ever becomes latency- or availability-critical.
+- Swap the NAT instance for a managed NAT gateway (~+$26/mo) if the ~2–3 min
+  egress gap during ASG replacement, or owning instance patching, stops being an
+  acceptable trade.
+- `auto_rollout` on the NAT instance to cycle onto refreshed AMIs automatically.

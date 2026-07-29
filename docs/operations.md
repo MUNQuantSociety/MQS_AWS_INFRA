@@ -52,7 +52,35 @@ aws ecs run-task --cluster $(terraform output -raw ecs_cluster_name) --task-defi
 `assignPublicIp` **must be `DISABLED`**. `task_subnet_ids` now returns private
 subnets, and Fargate rejects a task that asks for a public IP in a subnet with no
 route to an internet gateway. Egress still works — it goes out via the NAT
-gateway.
+instance.
+
+## NAT instance
+
+Egress for the private subnets runs on a fck-nat instance in an ASG of 1. The
+private route tables target a **static ENI**, so instance replacement does not
+break routing, and a pinned EIP keeps the public egress address stable.
+
+```bash
+terraform output nat_egress_ip              # give this to any provider that IP-allowlists
+terraform output nat_autoscaling_group_arn
+```
+
+Shell in without SSH (the instance carries an SSM policy, no port 22 open):
+
+```bash
+aws ssm start-session --target $(aws ec2 describe-instances --filters "Name=tag:Name,Values=mqsmaster-prod-nat" "Name=instance-state-name,Values=running" --query 'Reservations[0].Instances[0].InstanceId' --output text)
+```
+
+If egress stops, the usual cause is the instance being replaced — the ASG brings
+a new one up in ~2–3 minutes and it reattaches the same ENI and EIP. Force a
+replacement:
+
+```bash
+aws autoscaling start-instance-refresh --auto-scaling-group-name mqsmaster-prod-nat
+```
+
+The AMI is not auto-updated. `auto_rollout = true` on `module.fck_nat` enables
+automatic cycling onto refreshed AMIs; without it, patching is a manual refresh.
 
 ## Logs
 

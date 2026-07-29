@@ -36,7 +36,7 @@ Both workloads run in a purpose-built VPC (`10.0.0.0/16`), not the default VPC.
 
 ```
 VPC 10.0.0.0/16
-├── public subnets  10.0.4-6.0/24   IGW + one NAT gateway. No workloads.
+├── public subnets  10.0.4-6.0/24   IGW + one fck-nat NAT instance. No workloads.
 └── private subnets 10.0.1-3.0/24   Fargate tasks + RDS. No public IPs.
                                      └── 0.0.0.0/0 ──▶ NAT ──▶ IGW ──▶ internet
                                      └── S3 prefix ──▶ S3 gateway endpoint (free)
@@ -55,9 +55,34 @@ the task ENI. Outbound is unchanged from the operator's point of view:
 The task security group is **egress-only** — all protocols to `0.0.0.0/0`, zero
 ingress rules. Adding a new data provider needs no VPC or SG change.
 
-One behavioural change: outbound traffic now leaves from the NAT gateway's
-Elastic IP rather than a per-task public IP. If a provider IP-allowlists you,
-that EIP is the address to register, and it is stable across task restarts.
+One behavioural change: outbound traffic now leaves from a single Elastic IP
+rather than a per-task public IP. If a provider IP-allowlists you, that EIP is
+the address to register — `terraform output nat_egress_ip`. It is stable across
+task restarts *and* across NAT instance replacement.
+
+## The NAT instance
+
+Egress runs on a [fck-nat](https://fck-nat.dev) instance, not a managed NAT
+gateway. A gateway is ~$33/mo of which ~97% is the fixed hourly charge, and this
+stack pushes roughly 1 GB/mo through it — image pulls already bypass NAT via the
+S3 endpoint. The same masquerade on a `t4g.nano` costs ~$7.50/mo.
+
+The reliability design matters more than the price:
+
+- `ha_mode` runs the instance in an **ASG of 1** behind a **static ENI**.
+- The private route tables target that **ENI, not the instance**, so replacing
+  the instance does not invalidate the route.
+- A pinned EIP is attached, so the egress address survives replacement too.
+  (Without it fck-nat uses an ephemeral public IP that changes on every launch.)
+
+The trade against a gateway: you own an EC2 instance and its patching, and an
+ASG replacement means **~2–3 minutes with no egress**. Fine for a batch workload
+whose API calls retry; not fine for anything latency- or availability-critical.
+`attach_ssm_policy` is on, so access is via Session Manager — no SSH key, no
+port 22.
+
+Reverting to a managed gateway is `enable_nat_gateway = true` +
+`single_nat_gateway = true` on `module.vpc`, minus `module.fck_nat`.
 
 `modules/networking` owns the task SG and the S3 endpoint; the VPC itself comes
 from `terraform-aws-modules/vpc` 6.6.0, composed in `main.tf`.

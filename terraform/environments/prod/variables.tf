@@ -63,10 +63,15 @@ variable "public_subnet_cidrs" {
   }
 }
 
-variable "single_nat_gateway" {
-  description = "One NAT gateway for all AZs (~$32/mo) instead of one per AZ (~$97/mo). Set false for HA egress."
-  type        = bool
-  default     = true
+variable "nat_instance_type" {
+  description = <<EOT
+Instance type for the fck-nat NAT instance. t4g.nano (~$3.07/mo) is ample:
+NAT is kernel-side packet forwarding, and ECR image pulls bypass it via the S3
+gateway endpoint. Move to t4g.micro if sustained bulk transfer is ever routed
+through it -- nano's burst credits are the limit, not CPU.
+EOT
+  type        = string
+  default     = "t4g.nano"
 }
 
 ###############################################################################

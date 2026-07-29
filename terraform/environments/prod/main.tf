@@ -18,17 +18,15 @@ module "ecr_repository" {
 #
 #   - ecs_service_nlp (always-on) and ecs_task_market (scheduled) call out to
 #     FMP, Alpha Vantage and Apify over HTTPS.
-#   - Path: private subnet -> 0.0.0.0/0 route -> NAT gateway -> IGW -> internet.
+#   - Path: private subnet -> 0.0.0.0/0 route -> NAT instance -> IGW -> internet.
 #   - The task SG (modules/networking) allows all egress, so no per-host
 #     allowlisting is required; adding a new data provider needs no VPC change.
 #
 # The only traffic that does NOT take the NAT is S3 (and therefore ECR image
 # layers), which is routed through the free S3 gateway endpoint instead.
 #
-# Cost: single_nat_gateway = true keeps this to ONE NAT gateway (~$32/mo)
-# instead of one per AZ (~$97/mo). It is a single-AZ failure point for egress,
-# which is the accepted trade for a batch/scheduled workload. API responses are
-# JSON, so NAT data processing ($0.045/GB) on those calls is negligible.
+# Egress is provided by a fck-nat NAT *instance*, not a managed NAT gateway --
+# see module.fck_nat below for the cost reasoning.
 ###############################################################################
 
 module "vpc" {
@@ -42,8 +40,9 @@ module "vpc" {
   private_subnets = var.private_subnet_cidrs
   public_subnets  = var.public_subnet_cidrs
 
-  enable_nat_gateway = true
-  single_nat_gateway = var.single_nat_gateway
+  # No managed NAT gateway: module.fck_nat owns the private 0.0.0.0/0 route.
+  # Leaving this true would create a competing default route.
+  enable_nat_gateway = false
 
   # Tasks run in private subnets and never take a public IP.
   map_public_ip_on_launch = false
@@ -53,6 +52,68 @@ module "vpc" {
 
   enable_dns_hostnames = true
   enable_dns_support   = true
+}
+
+###############################################################################
+# NAT instance (fck-nat) instead of a managed NAT gateway.
+#
+# A NAT gateway is ~$33/mo of which ~97% is the fixed hourly charge -- this
+# stack pushes roughly 1 GB/mo through it, because ECR image layers already
+# bypass NAT via the S3 gateway endpoint. Paying gateway prices for kernel
+# packet forwarding at that volume is the single worst line in the bill, so
+# this runs the same masquerade on a t4g.nano for ~$7.40/mo all-in
+# (instance ~$3.07 + 8 GB gp3 ~$0.64 + public IPv4 ~$3.65).
+#
+# Reliability: ha_mode puts the instance in an ASG of 1 behind a STATIC ENI.
+# The private route table targets that ENI, not the instance, so an instance
+# replacement does not invalidate the route. Expect ~2-3 min of no egress while
+# the ASG replaces a failed instance -- acceptable for a batch/scheduled
+# workload whose API calls retry, and the reason this is not appropriate for
+# anything latency- or availability-critical.
+#
+# Operational cost: unlike a NAT gateway, this is an EC2 instance you own and
+# must patch. auto_rollout can cycle instances onto refreshed AMIs.
+# attach_ssm_policy (default true) gives Session Manager access, so no SSH key
+# and no port 22.
+#
+# To revert to a managed NAT gateway: set enable_nat_gateway = true and
+# single_nat_gateway = true above, and remove this module.
+###############################################################################
+
+// Without an explicit EIP, fck-nat launches with an *ephemeral* public IP, so
+// the egress address changes every time the ASG replaces the instance. A NAT
+// gateway has a stable address, and provider IP-allowlisting depends on that,
+// so pin one here. No extra cost: AWS bills any in-use public IPv4 the same.
+resource "aws_eip" "nat" {
+  domain = "vpc"
+
+  tags = {
+    Name = "${local.name_prefix}-nat-eip"
+  }
+}
+
+module "fck_nat" {
+  source  = "RaJiska/fck-nat/aws"
+  version = "~> 1.6"
+
+  name      = "${local.name_prefix}-nat"
+  vpc_id    = module.vpc.vpc_id
+  subnet_id = module.vpc.public_subnets[0] # must be public: this is the exit point
+
+  ha_mode            = true
+  instance_type      = var.nat_instance_type
+  eip_allocation_ids = [aws_eip.nat.id]
+
+  # route_tables_ids is a map(string), not a list -- the VPC module returns a
+  # list, so it has to be projected into one keyed by index.
+  update_route_tables = true
+  route_tables_ids = {
+    for idx, rt in module.vpc.private_route_table_ids : "private-${idx}" => rt
+  }
+
+  tags = {
+    Name = "${local.name_prefix}-nat"
+  }
 }
 
 module "networking" {

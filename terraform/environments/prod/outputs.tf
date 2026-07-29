@@ -72,9 +72,24 @@ output "vpc_id" {
   value       = module.vpc.vpc_id
 }
 
-output "nat_gateway_ids" {
-  description = "NAT gateway IDs providing egress for the private subnets."
-  value       = module.vpc.natgw_ids
+output "nat_egress_ip" {
+  description = "Stable public IP all outbound traffic leaves from. Register this with any provider that IP-allowlists."
+  value       = aws_eip.nat.public_ip
+}
+
+output "nat_instance_eni_id" {
+  description = "Static ENI the private route tables target for egress. Stable across instance replacement."
+  value       = module.fck_nat.eni_id
+}
+
+output "nat_instance_security_group_ids" {
+  description = "Security groups attached to the NAT instance."
+  value       = module.fck_nat.security_group_ids
+}
+
+output "nat_autoscaling_group_arn" {
+  description = "ASG that keeps exactly one NAT instance alive (ha_mode)."
+  value       = module.fck_nat.autoscaling_group_arn
 }
 
 output "scheduler_role_arn" {
