@@ -36,12 +36,12 @@ MQS_AWS_INFRA/
     │       ├── variables.tf                # All input variables
     │       ├── outputs.tf                  # Top-level outputs
     │       ├── providers.tf                # AWS provider + default tags
-    │       ├── versions.tf                 # Terraform + provider version pins
+    │       ├── terraform.tf                # Terraform + provider version pins
     │       ├── backend.tf                  # S3 + DynamoDB backend stub
     │       ├── moved.tf                    # State shims for the module rename
     │       └── terraform.tfvars.example    # Copy → terraform.tfvars
     └── modules/
-        ├── networking/                     # Default VPC data + egress-only task SG
+        ├── networking/                     # Egress-only task SG + free S3 gateway endpoint
         ├── ecr-repository/                 # ECR repo + lifecycle policy
         ├── iam-roles/                      # Task execution + task roles, secrets policy
         ├── secrets-manager/                # DB credentials + API keys
@@ -76,7 +76,7 @@ Adding an environment is a directory copy — see
 ## Quickstart
 
 ```bash
-cd terraform/environments/prod && cp terraform.tfvars.example terraform.tfvars && terraform init && terraform plan
+cd terraform/environments/prod && cp terraform.tfvars.example terraform.tfvars && terraform init -upgrade && terraform plan
 ```
 
 Full deploy steps in [docs/operations.md](docs/operations.md#deploy).
@@ -92,7 +92,7 @@ Full deploy steps in [docs/operations.md](docs/operations.md#deploy).
 | **Secrets Manager** | DB credentials and API keys, injected by ECS at task start |
 | **CloudWatch Logs** | Single log group for both workloads, split by stream prefix |
 | **IAM** | Task execution role, task role, scheduler invoke role |
-| **VPC / EC2 networking** | Default VPC + subnets (data sources), two managed security groups |
+| **VPC / EC2 networking** | Purpose-built VPC: private subnets for all workloads, public subnets for the IGW + a single NAT gateway, free S3 gateway endpoint, two managed security groups |
 
 ## Future work
 
@@ -100,4 +100,5 @@ Full deploy steps in [docs/operations.md](docs/operations.md#deploy).
 - Add a stop-task schedule as a safety net if `is_market_open` stays true past close.
 - CloudWatch Alarm + SNS on `ECSTaskStateChange` failures.
 - FARGATE_SPOT for the NLP service (~70% cheaper, tolerates restarts).
-- Replace the default VPC with a purpose-built VPC and private subnets + NAT.
+- Second NAT gateway for HA egress (`single_nat_gateway = false`, ~+$32/mo) if
+  the batch workload ever becomes latency- or availability-critical.

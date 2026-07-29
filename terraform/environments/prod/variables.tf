@@ -21,6 +21,55 @@ variable "environment" {
 }
 
 ###############################################################################
+# Networking
+###############################################################################
+
+variable "vpc_cidr" {
+  description = "CIDR block for the dedicated VPC."
+  type        = string
+  default     = "10.0.0.0/16"
+}
+
+variable "az_count" {
+  description = "Number of AZs to spread subnets across. Minimum 2 (RDS subnet groups require it)."
+  type        = number
+  default     = 3
+
+  validation {
+    condition     = var.az_count >= 2
+    error_message = "az_count must be at least 2: RDS subnet groups require two AZs."
+  }
+}
+
+variable "private_subnet_cidrs" {
+  description = "Private subnet CIDRs. Fargate tasks and RDS live here. Must have az_count entries."
+  type        = list(string)
+  default     = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+
+  validation {
+    condition     = length(var.private_subnet_cidrs) == var.az_count
+    error_message = "private_subnet_cidrs must have exactly az_count entries; otherwise subnets silently wrap across AZs."
+  }
+}
+
+variable "public_subnet_cidrs" {
+  description = "Public subnet CIDRs. Carry only the IGW + NAT gateway. Must have az_count entries."
+  type        = list(string)
+  default     = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]
+
+  validation {
+    condition     = length(var.public_subnet_cidrs) == var.az_count
+    error_message = "public_subnet_cidrs must have exactly az_count entries; otherwise subnets silently wrap across AZs."
+  }
+}
+
+variable "single_nat_gateway" {
+  description = "One NAT gateway for all AZs (~$32/mo) instead of one per AZ (~$97/mo). Set false for HA egress."
+  type        = bool
+  default     = true
+}
+
+###############################################################################
 # ECR / image
 ###############################################################################
 

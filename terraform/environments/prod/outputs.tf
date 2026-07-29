@@ -63,8 +63,18 @@ output "task_security_group_id" {
 }
 
 output "task_subnet_ids" {
-  description = "Subnets used by all Fargate tasks (default VPC)."
-  value       = module.networking.subnet_ids
+  description = "Private subnets used by all Fargate tasks."
+  value       = module.vpc.private_subnets
+}
+
+output "vpc_id" {
+  description = "Dedicated VPC ID."
+  value       = module.vpc.vpc_id
+}
+
+output "nat_gateway_ids" {
+  description = "NAT gateway IDs providing egress for the private subnets."
+  value       = module.vpc.natgw_ids
 }
 
 output "scheduler_role_arn" {

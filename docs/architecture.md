@@ -18,7 +18,7 @@ ECS Service mqsmaster-prod-nlp           EventBridge Scheduler ──▶ ECS Run
                                                                             rbp_runner.py
                                                                           exits when market closes
                               │
-                              ├── RDS PostgreSQL (private, task SG only)
+                              ├── RDS PostgreSQL (private subnets, task SG only)
                               ├── Secrets Manager (db creds, API keys)
                               └── CloudWatch Logs (/ecs/mqsmaster-prod, streams: mqsmaster/*, nlp/*)
 ```
@@ -29,6 +29,38 @@ ECS Service mqsmaster-prod-nlp           EventBridge Scheduler ──▶ ECS Run
 |---|---|---|---|
 | NLP service | `ecs-service-nlp` | Always-on ECS Service, restarts on crash | `python NLP/main_NLP.py` |
 | Market task | `ecs-task-market` | Ephemeral, EventBridge-triggered Mon–Fri | `start.sh` (NLP block stripped at runtime) |
+
+## Network topology
+
+Both workloads run in a purpose-built VPC (`10.0.0.0/16`), not the default VPC.
+
+```
+VPC 10.0.0.0/16
+├── public subnets  10.0.4-6.0/24   IGW + one NAT gateway. No workloads.
+└── private subnets 10.0.1-3.0/24   Fargate tasks + RDS. No public IPs.
+                                     └── 0.0.0.0/0 ──▶ NAT ──▶ IGW ──▶ internet
+                                     └── S3 prefix ──▶ S3 gateway endpoint (free)
+```
+
+**Private does not mean isolated.** It means no inbound path and no public IP on
+the task ENI. Outbound is unchanged from the operator's point of view:
+
+| Destination | Path |
+|---|---|
+| FMP, Alpha Vantage, Apify (HTTPS) | private subnet → NAT → IGW |
+| ECR image layers (S3-backed) | S3 gateway endpoint, bypasses NAT |
+| Secrets Manager, CloudWatch Logs | private subnet → NAT → IGW |
+| RDS | stays inside the VPC |
+
+The task security group is **egress-only** — all protocols to `0.0.0.0/0`, zero
+ingress rules. Adding a new data provider needs no VPC or SG change.
+
+One behavioural change: outbound traffic now leaves from the NAT gateway's
+Elastic IP rather than a per-task public IP. If a provider IP-allowlists you,
+that EIP is the address to register, and it is stable across task restarts.
+
+`modules/networking` owns the task SG and the S3 endpoint; the VPC itself comes
+from `terraform-aws-modules/vpc` 6.6.0, composed in `main.tf`.
 
 ## Data flow
 
