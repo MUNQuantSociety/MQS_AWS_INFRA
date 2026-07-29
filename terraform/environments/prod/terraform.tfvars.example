@@ -3,8 +3,10 @@
 aws_region          = "us-east-2"
 project_name        = "mqsmaster"
 environment         = "prod"
-ecr_repository_name = "mqsmaster"
-image_tag           = "latest"
+# Existing repo, adopted (not created) by Terraform. Must already exist.
+ecr_repository_name = "livetradingbot"
+# Must be a tag that exists in that repo; it carries no "latest".
+image_tag           = "1.0.5-4"
 
 # Networking. Defaults build a dedicated VPC: workloads in private subnets,
 # IGW + one NAT gateway in the public subnets. All optional - omit to accept

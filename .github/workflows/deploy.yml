@@ -7,7 +7,7 @@ on:
 
 env:
   AWS_REGION: us-east-2
-  ECR_REPOSITORY: mqsmaster
+  ECR_REPOSITORY: livetradingbot
   ECS_CLUSTER: mqsmaster-prod-cluster
   MARKET_TASK_FAMILY: mqsmaster-prod
   MARKET_CONTAINER_NAME: mqsmaster
