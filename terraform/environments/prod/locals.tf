@@ -3,28 +3,30 @@ locals {
   log_group   = "/ecs/${local.name_prefix}"
   image_uri   = "${module.ecr_repository.repository_url}:${var.image_tag}"
 
-  # DB secret written to Secrets Manager. host/port are overridden with the
+  # DB credentials written to Parameter Store. host/port are overridden with the
   # provisioned RDS endpoint so containers connect to our RDS, not an external
   # host. user/password/database/sslmode come from var.db_secret_values.
-  # NOTE: the secret version has ignore_changes = [secret_string]; if the RDS
-  # instance is ever replaced (new endpoint), update the secret manually.
+  # NOTE: parameter values are write-only, so Terraform cannot see that host
+  # changed. If the RDS instance is ever replaced (new endpoint), this local
+  # updates but nothing is pushed until db_parameter_version is bumped.
   db_secret_values = merge(var.db_secret_values, {
     host = module.rds_postgres.db_address
     port = tostring(module.rds_postgres.db_port)
   })
 
-  # Single source of truth for the secrets ECS injects into both task
-  # definitions. Adding a new key here propagates to both market + NLP tasks.
-  container_secrets = concat(
-    [for k in ["db_user", "password", "host", "port", "database", "sslmode"] : {
-      name      = k
-      valueFrom = "${module.secrets_manager.db_secret_arn}:${k}::"
-    }],
-    [for k in ["FMP_API_KEY", "ALPHA_KEY", "APIFY_KEY"] : {
-      name      = k
-      valueFrom = "${module.secrets_manager.api_secret_arn}:${k}::"
-    }],
-  )
+  # Secrets ECS injects into both task definitions. Each Parameter Store
+  # parameter holds exactly one credential and its leaf name is the environment
+  # variable name, so valueFrom is the bare parameter ARN -- Parameter Store has
+  # no equivalent of the Secrets Manager `:json-key::` selector.
+  #
+  # The key list now lives in modules/ssm-parameters; adding a credential there
+  # propagates here and into both task definitions automatically.
+  container_secrets = [
+    for name, arn in module.ssm_parameters.parameter_arns : {
+      name      = name
+      valueFrom = arn
+    }
+  ]
 }
 
 data "aws_caller_identity" "current" {}

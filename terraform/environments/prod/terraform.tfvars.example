@@ -14,10 +14,14 @@ image_tag           = "1.0.5-4"
 #
 # single_nat_gateway is the main cost lever here: true = one NAT (~$32/mo),
 # false = one per AZ (~$97/mo) for HA egress.
+#
+# az_count = 2 is the floor: RDS subnet groups require two AZs. It is NOT a cost
+# lever -- single_nat_gateway caps NAT at one gateway whatever the AZ count, and
+# subnets/route tables/IGW carry no hourly charge. Raise it for spread, not spend.
 vpc_cidr             = "10.0.0.0/16"
-az_count             = 3
-private_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"] # tasks + RDS
-public_subnet_cidrs  = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"] # IGW + NAT only
+az_count             = 2
+private_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24"] # tasks + RDS
+public_subnet_cidrs  = ["10.0.4.0/24", "10.0.5.0/24"] # IGW + NAT only
 single_nat_gateway   = true
 
 # Market task (scheduled, Mon-Fri).
@@ -65,3 +69,12 @@ api_secret_values = {
   ALPHA_KEY   = "REPLACE_ME"
   APIFY_KEY   = "REPLACE_ME"
 }
+
+# Credential values above are write-only: they never enter Terraform state or
+# plan output, which also means Terraform cannot tell when you change one.
+# After editing a value above, BUMP the matching counter or apply is a no-op.
+# Bumping rewrites every parameter in that group, discarding out-of-band
+# rotations — to rotate a single credential, prefer `aws ssm put-parameter`
+# (see docs/operations.md#rotating-secrets).
+db_parameter_version  = 1
+api_parameter_version = 1

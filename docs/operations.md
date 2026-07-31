@@ -80,13 +80,67 @@ aws logs tail /ecs/mqsmaster-prod --log-stream-name-prefix nlp --since 1h --foll
 
 ## Rotating secrets
 
-Initial values come from `terraform.tfvars`. After apply, the
-`aws_secretsmanager_secret_version` resources carry `ignore_changes`, so console
-or CLI rotations are **not** overwritten by a later `terraform apply`.
+Initial values come from `terraform.tfvars`. Values are passed as **write-only**
+arguments (`value_wo`), so they are sent to AWS but never written to state or
+plan files, and Terraform cannot diff them. An update fires only when the paired
+`value_wo_version` changes — which means console or CLI rotations are **not**
+overwritten by a later `terraform apply`.
+
+**Preferred: rotate directly in AWS.** Each credential is a separate SecureString
+parameter, so rotate them one at a time rather than rewriting a JSON blob.
+
+> **Do not paste secrets on the command line.** `--value '<new>'` lands the
+> credential in `~/.zsh_history` (and in the process list while it runs). Read it
+> from a mode-600 file instead and delete the file afterwards, or rotate in the
+> AWS console.
 
 ```bash
-aws secretsmanager put-secret-value --secret-id mqsmaster-prod/db --secret-string '{"db_user":"mqsadmin","password":"<new>","host":"<rds-endpoint>","port":"5432","database":"mqsdb","sslmode":"prefer"}'
+umask 077 && printf '%s' '<new>' > /tmp/rot.$$   # not world-readable
+aws ssm put-parameter --name /mqsmaster-prod/db/password \
+  --type SecureString --value "file:///tmp/rot.$$" --overwrite
+shred -u /tmp/rot.$$ 2>/dev/null || rm -P /tmp/rot.$$
 ```
+
+The parameter keeps whatever KMS key it was created with, so `--key-id` is not
+needed on rotation. It is only required when **changing** the key — the default
+is the AWS-managed `alias/aws/ssm`; pass the CMK explicitly if the module's
+`kms_key_id` has been pointed at a customer managed key:
+
+```bash
+aws ssm put-parameter --name /mqsmaster-prod/db/password \
+  --type SecureString --key-id 'alias/mqsmaster-prod' \
+  --value "file:///tmp/rot.$$" --overwrite
+```
+
+List what exists (metadata only, no values):
+
+```bash
+aws ssm describe-parameters --parameter-filters 'Key=Path,Option=Recursive,Values=/mqsmaster-prod'
+```
+
+**Alternative: re-seed from Terraform.** Edit the value in `terraform.tfvars`,
+then bump the matching version counter in the same file — editing the value alone
+does nothing, because Terraform cannot see it:
+
+```hcl
+db_secret_values     = { ... }   # new password here
+db_parameter_version = 2         # <- without this bump, apply is a no-op
+```
+
+`terraform.tfvars` holds live credentials in plaintext. It is gitignored
+(`.gitignore:5`) and must stay that way; keep it mode 600 and never copy it into
+a shared location. Only `terraform.tfvars.example`, which contains placeholders,
+is tracked.
+
+Bumping `db_parameter_version` rewrites **all six** `/db/*` parameters **and the
+RDS master password** — they share the counter deliberately, so the database and
+the credential the containers read cannot drift apart. `api_parameter_version`
+covers the three `/api/*` keys. Either way the whole group is rewritten,
+discarding out-of-band rotations of the others, so prefer `put-parameter` when
+rotating a single credential.
+
+This is also the mechanism for fixing `/mqsmaster-prod/db/host` if RDS is ever
+replaced and gets a new endpoint — bump `db_parameter_version` and apply.
 
 Running tasks keep the old value — secrets are read at task start. Force a
 refresh of the always-on NLP service:
@@ -122,9 +176,3 @@ cp -r terraform/environments/prod terraform/environments/staging
 
 Each environment keeps its own state and `terraform.tfvars`. Module sources
 (`../../modules/...`) resolve identically from any environment directory.
-
-## Module rename note
-
-The 2026-07 restructure renamed every module directory and label. State-migration
-shims live in `environments/prod/moved.tf`. They are inert on a fresh workspace
-and can be deleted once every workspace has applied at least once post-rename.

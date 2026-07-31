@@ -38,13 +38,12 @@ MQS_AWS_INFRA/
     │       ├── providers.tf                # AWS provider + default tags
     │       ├── terraform.tf                # Terraform + provider version pins
     │       ├── backend.tf                  # S3 + DynamoDB backend stub
-    │       ├── moved.tf                    # State shims for the module rename
     │       └── terraform.tfvars.example    # Copy → terraform.tfvars
     └── modules/
         ├── networking/                     # Egress-only task SG + free S3 gateway endpoint
         ├── ecr-repository/                 # ECR repo + lifecycle policy
-        ├── iam-roles/                      # Task execution + task roles, secrets policy
-        ├── secrets-manager/                # DB credentials + API keys
+        ├── iam-roles/                      # Task execution + task roles, ssm:GetParameters policy
+        ├── ssm-parameters/                 # DB credentials + API keys (SSM SecureString params)
         ├── cloudwatch-logs/                # Log group + retention
         ├── rds-postgres/                   # RDS instance, subnet group, DB SG
         ├── ecs-cluster/                    # Cluster + Fargate capacity providers
@@ -66,7 +65,7 @@ Adding an environment is a directory copy — see
 
 1. AWS credentials with sufficient IAM permissions, configured locally
    (`aws configure` — requires an **access key**, not console sign-in credentials).
-2. Terraform >= 1.5.
+2. Terraform >= 1.11 (required for write-only arguments).
 3. The MQSMaster repo on GitHub with a `Dockerfile` at the root.
 4. GitHub OIDC provider configured in AWS (one-time). Create an IAM role trusted by
    `token.actions.githubusercontent.com` with ECR push plus
@@ -89,7 +88,7 @@ Full deploy steps in [docs/operations.md](docs/operations.md#deploy).
 | **ECR** | Container image registry, with a lifecycle policy to expire old images |
 | **RDS (PostgreSQL)** | Managed database, private, reachable only from the task SG |
 | **EventBridge Scheduler** | Timezone-aware Mon–Fri cron that calls ECS `RunTask` |
-| **Secrets Manager** | DB credentials and API keys, injected by ECS at task start |
+| **SSM Parameter Store** | DB credentials and API keys as SecureString params, injected by ECS at task start |
 | **CloudWatch Logs** | Single log group for both workloads, split by stream prefix |
 | **IAM** | Task execution role, task role, scheduler invoke role |
 | **VPC / EC2 networking** | Purpose-built VPC: private subnets for all workloads, public subnets for the IGW + a single NAT gateway, free S3 gateway endpoint, two managed security groups |

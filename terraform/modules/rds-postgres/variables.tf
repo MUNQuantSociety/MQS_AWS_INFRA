@@ -24,9 +24,15 @@ variable "db_username" {
 }
 
 variable "db_password" {
-  description = "Master password. Min 8 chars; no /, @, \", or space."
+  description = "Master password, passed as a write-only argument so it never lands in state. Min 8 chars; no /, @, \", or space."
   type        = string
   sensitive   = true
+}
+
+variable "db_password_version" {
+  description = "Bump to push a new db_password to RDS. The password is write-only, so Terraform cannot detect that it changed -- only this counter triggers an update."
+  type        = number
+  default     = 1
 }
 
 variable "db_name" {

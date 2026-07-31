@@ -3,7 +3,7 @@ variable "name_prefix" {
   type        = string
 }
 
-variable "secret_arns" {
-  description = "Secrets Manager ARNs the task execution role may read."
+variable "parameter_arns" {
+  description = "SSM Parameter Store ARNs the task execution role may read."
   type        = list(string)
 }

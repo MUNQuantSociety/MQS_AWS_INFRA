@@ -1,10 +1,12 @@
 # Terraform
 **/.terraform/
-**/.terraform.lock.hcl
 **/*.tfstate
 **/*.tfstate.*
 **/*.tfvars
 !**/terraform.tfvars.example
+# Saved plan files embed root variable values (incl. secrets) in cleartext.
+*.tfplan
+*.plan
 crash.log
 crash.*.log
 override.tf

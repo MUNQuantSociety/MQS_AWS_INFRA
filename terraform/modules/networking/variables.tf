@@ -13,7 +13,7 @@ variable "aws_region" {
   type        = string
 }
 
-variable "private_route_table_ids" {
-  description = "Private route tables the S3 gateway endpoint is associated with."
+variable "route_table_ids" {
+  description = "Route tables the S3 gateway endpoint is associated with (public + private)."
   type        = list(string)
 }

@@ -58,10 +58,14 @@ module "vpc" {
 module "networking" {
   source = "../../modules/networking"
 
-  name_prefix             = local.name_prefix
-  vpc_id                  = module.vpc.vpc_id
-  aws_region              = var.aws_region
-  private_route_table_ids = module.vpc.private_route_table_ids
+  name_prefix = local.name_prefix
+  vpc_id      = module.vpc.vpc_id
+  aws_region  = var.aws_region
+  # Private RTs are what actually matters: all task/RDS S3 traffic originates
+  # there and takes the endpoint instead of the NAT. Public RTs are included for
+  # completeness -- today nothing runs in the public subnets (they carry only the
+  # IGW and NAT gateway), so that half is inert until something is placed there.
+  route_table_ids = concat(module.vpc.private_route_table_ids, module.vpc.public_route_table_ids)
 }
 
 module "rds_postgres" {
@@ -77,6 +81,10 @@ module "rds_postgres" {
   db_name     = var.db_secret_values.database
   port        = tonumber(var.db_secret_values.port)
 
+  # Same counter that versions /<prefix>/db/* in SSM: one bump rotates the RDS
+  # master password and the parameter the containers read, together.
+  db_password_version = var.db_parameter_version
+
   engine_version          = var.db_engine_version
   instance_class          = var.db_instance_class
   allocated_storage       = var.db_allocated_storage
@@ -87,19 +95,21 @@ module "rds_postgres" {
   skip_final_snapshot     = var.db_skip_final_snapshot
 }
 
-module "secrets_manager" {
-  source = "../../modules/secrets-manager"
+module "ssm_parameters" {
+  source = "../../modules/ssm-parameters"
 
-  name_prefix       = local.name_prefix
-  db_secret_values  = local.db_secret_values
-  api_secret_values = var.api_secret_values
+  name_prefix           = local.name_prefix
+  db_secret_values      = local.db_secret_values
+  api_secret_values     = var.api_secret_values
+  db_parameter_version  = var.db_parameter_version
+  api_parameter_version = var.api_parameter_version
 }
 
 module "iam_roles" {
   source = "../../modules/iam-roles"
 
-  name_prefix = local.name_prefix
-  secret_arns = [module.secrets_manager.db_secret_arn, module.secrets_manager.api_secret_arn]
+  name_prefix    = local.name_prefix
+  parameter_arns = module.ssm_parameters.parameter_arn_list
 }
 
 module "cloudwatch_logs" {

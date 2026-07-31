@@ -1,7 +1,7 @@
 ###############################################################################
 # RDS PostgreSQL for MQSMaster.
 #
-# Provisions a managed Postgres instance in the default VPC's subnets, reachable
+# Provisions a managed Postgres instance in the dedicated VPC's private subnets, reachable
 # only from the ECS Fargate tasks (ingress 5432 from the task security group).
 # The instance endpoint + port are exported and wired into the DB secret so the
 # market + NLP containers connect to this DB instead of an external host.
@@ -9,7 +9,7 @@
 
 resource "aws_db_subnet_group" "this" {
   name        = "${var.name_prefix}-db"
-  description = "Subnet group for MQSMaster RDS (default VPC subnets)"
+  description = "Subnet group for MQSMaster RDS (private subnets)"
   subnet_ids  = var.subnet_ids
 }
 
@@ -51,8 +51,19 @@ resource "aws_db_instance" "this" {
 
   db_name  = var.db_name
   username = var.db_username
-  password = var.db_password
   port     = var.port
+
+  # Write-only: the master password is sent to RDS but never persisted to state
+  # or plan files. `password` would be stored in state in plaintext -- see the
+  # provider's own note on that argument. An update fires only when
+  # password_wo_version changes, which is what makes `ignore_changes` on the
+  # password unnecessary: an out-of-band rotation is never drift-corrected.
+  #
+  # password_wo_version is wired to the same counter that versions
+  # /<prefix>/db/* in SSM, so one bump rotates the RDS master password and the
+  # parameter containers read together, keeping them from drifting apart.
+  password_wo         = var.db_password
+  password_wo_version = var.db_password_version
 
   db_subnet_group_name   = aws_db_subnet_group.this.name
   vpc_security_group_ids = [aws_security_group.db.id]
@@ -68,10 +79,4 @@ resource "aws_db_instance" "this" {
   deletion_protection       = var.deletion_protection
   skip_final_snapshot       = var.skip_final_snapshot
   final_snapshot_identifier = var.skip_final_snapshot ? null : "${var.name_prefix}-postgres-final"
-
-  lifecycle {
-    # Master password is managed via tfvars/Secrets Manager, not drift-corrected
-    # on every apply if rotated out-of-band.
-    ignore_changes = [password]
-  }
 }

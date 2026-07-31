@@ -18,7 +18,7 @@ resource "aws_security_group" "task" {
   vpc_id      = var.vpc_id
 
   egress {
-    description = "Allow all outbound (DB, third-party APIs, ECR, Secrets Manager, logs)"
+    description = "Allow all outbound (DB, third-party APIs, ECR, SSM Parameter Store, logs)"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -29,11 +29,15 @@ resource "aws_security_group" "task" {
 # Gateway endpoints are free, and ECR stores image layers in S3. Routing those
 # pulls through the endpoint instead of the NAT gateway removes the bulk of NAT
 # data-processing charges ($0.045/GB) on every task start.
+#
+# Associated with both subnet tiers' route tables. The private ones carry the
+# real traffic; the public ones are inert while nothing runs in public subnets.
+# Same-region S3 only -- cross-region requests fall back to the NAT/IGW path.
 resource "aws_vpc_endpoint" "s3" {
   vpc_id            = var.vpc_id
   service_name      = "com.amazonaws.${var.aws_region}.s3"
   vpc_endpoint_type = "Gateway"
-  route_table_ids   = var.private_route_table_ids
+  route_table_ids   = var.route_table_ids
 
   tags = {
     Name = "${var.name_prefix}-s3-endpoint"

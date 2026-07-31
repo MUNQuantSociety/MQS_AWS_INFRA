@@ -31,9 +31,9 @@ variable "vpc_cidr" {
 }
 
 variable "az_count" {
-  description = "Number of AZs to spread subnets across. Minimum 2 (RDS subnet groups require it)."
+  description = "Number of AZs to spread subnets across. 2 is the floor and the default: RDS subnet groups require two AZs, and AZ count does not affect cost (single_nat_gateway caps NAT at one; subnets/route tables/IGW are free)."
   type        = number
-  default     = 3
+  default     = 2
 
   validation {
     condition     = var.az_count >= 2
@@ -44,7 +44,7 @@ variable "az_count" {
 variable "private_subnet_cidrs" {
   description = "Private subnet CIDRs. Fargate tasks and RDS live here. Must have az_count entries."
   type        = list(string)
-  default     = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+  default     = ["10.0.1.0/24", "10.0.2.0/24"]
 
   validation {
     condition     = length(var.private_subnet_cidrs) == var.az_count
@@ -55,7 +55,7 @@ variable "private_subnet_cidrs" {
 variable "public_subnet_cidrs" {
   description = "Public subnet CIDRs. Carry only the IGW + NAT gateway. Must have az_count entries."
   type        = list(string)
-  default     = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]
+  default     = ["10.0.4.0/24", "10.0.5.0/24"]
 
   validation {
     condition     = length(var.public_subnet_cidrs) == var.az_count
@@ -247,9 +247,26 @@ variable "use_scheduler_timezone" {
 # Secrets (initial values — rotate via console after apply)
 ###############################################################################
 
+variable "db_parameter_version" {
+  description = <<EOT
+Bump to push db_secret_values into SSM Parameter Store.
+Parameter values are write-only (never stored in state or plan), so Terraform
+cannot detect that you changed a value here -- only a change to this number
+triggers an update. Bumping overwrites out-of-band rotations of /db/*.
+EOT
+  type        = number
+  default     = 1
+}
+
+variable "api_parameter_version" {
+  description = "Bump to push api_secret_values into SSM Parameter Store. Same semantics as db_parameter_version, scoped to /api/*."
+  type        = number
+  default     = 1
+}
+
 variable "db_secret_values" {
   description = <<EOT
-DB credentials stored in Secrets Manager and used to provision RDS.
+DB credentials stored in SSM Parameter Store and used to provision RDS.
   db_user / password / database -> become the RDS master user / password / db_name
   password  MUST be set in terraform.tfvars (min 8 chars; no /, @, ", or space)
   host      is IGNORED — overwritten with the RDS endpoint (see locals.tf)
@@ -275,7 +292,7 @@ EOT
 }
 
 variable "api_secret_values" {
-  description = "Initial API keys stored in Secrets Manager."
+  description = "API keys stored in SSM Parameter Store."
   type = object({
     FMP_API_KEY = string
     ALPHA_KEY   = string

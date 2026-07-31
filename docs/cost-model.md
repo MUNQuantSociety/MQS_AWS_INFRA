@@ -10,10 +10,19 @@ Estimates for `us-east-2` at the default sizing in `variables.tf`.
 | NLP service (Fargate, always-on) | 0.5 vCPU / 2 GB × 730 h | ~$14–18 |
 | NLP service (alt, smaller) | 0.25 vCPU / 2 GB × 730 h | ~$8–11 |
 | ECR storage | a few image revisions | ~$0.10 |
-| Secrets Manager | 2 secrets × $0.40 | $0.80 |
+| SSM Parameter Store | 9 Standard SecureString params | $0 |
 | CloudWatch Logs | volume-dependent | ~$2–3 |
-| **Subtotal (default sizing)** | | **~$30–37/mo** |
-| **Subtotal (smaller NLP)** | | **~$25–30/mo** |
+| **Subtotal (default sizing)** | | **~$27–36/mo** |
+| **Subtotal (smaller NLP)** | | **~$21–29/mo** |
+
+Credential storage is free. Standard-tier parameters carry no storage charge
+regardless of type — `SecureString` included — and at standard throughput there
+is no per-API-call charge either, so the ~2 `GetParameters` calls per task start
+cost nothing. The AWS-managed `alias/aws/ssm` key adds nothing; a customer
+managed key would add **$1/mo**, more than the two Secrets Manager secrets this
+replaced ($0.40 each). Advanced tier would be $0.05/parameter/month — $0.45/mo
+for these nine — and buys only >4 KB values and policies, neither of which
+applies here.
 
 ## Networking
 
@@ -31,9 +40,15 @@ The NAT gateway is the whole networking bill. Two choices hold it down:
   would be ~$97/mo. The trade is a single-AZ failure point for egress.
 - The **free S3 gateway endpoint** keeps ECR image layer pulls off the NAT.
   Without it, every task start would push a multi-hundred-MB image pull through
-  NAT data processing. Interface endpoints for ECR/Secrets/Logs were considered
-  and rejected: at ~$7.20/mo each **per AZ**, four of them across 3 AZs costs
+  NAT data processing. Interface endpoints for ECR/SSM/Logs were considered
+  and rejected: at ~$7.20/mo each **per AZ**, four of them across 2 AZs costs
   more than the NAT they would replace.
+
+`az_count` is not a cost lever. It defaults to **2**, the floor imposed by RDS
+subnet groups, and raising it changes nothing on the bill: `single_nat_gateway`
+caps NAT at one gateway whatever the AZ count, and subnets, route tables and the
+IGW carry no hourly charge. The only networking lever that moves money is the NAT
+gateway itself — see the Levers table.
 
 ## Database
 
@@ -48,7 +63,7 @@ Setting `db_multi_az = true` roughly doubles the instance and storage lines.
 
 ## Total
 
-**~$130–152/mo** at defaults (compute ~$30–37, networking ~$33, database ~$67–82).
+**~$127–151/mo** at defaults (compute ~$27–36, networking ~$33, database ~$67–82).
 RDS still dominates at roughly half the bill; the NAT gateway is the next single
 largest line.
 

@@ -19,7 +19,7 @@ ECS Service mqsmaster-prod-nlp           EventBridge Scheduler ──▶ ECS Run
                                                                           exits when market closes
                               │
                               ├── RDS PostgreSQL (private subnets, task SG only)
-                              ├── Secrets Manager (db creds, API keys)
+                              ├── SSM Parameter Store (db creds, API keys)
                               └── CloudWatch Logs (/ecs/mqsmaster-prod, streams: mqsmaster/*, nlp/*)
 ```
 
@@ -36,8 +36,8 @@ Both workloads run in a purpose-built VPC (`10.0.0.0/16`), not the default VPC.
 
 ```
 VPC 10.0.0.0/16
-├── public subnets  10.0.4-6.0/24   IGW + one NAT gateway. No workloads.
-└── private subnets 10.0.1-3.0/24   Fargate tasks + RDS. No public IPs.
+├── public subnets  10.0.4-5.0/24   IGW + one NAT gateway. No workloads.
+└── private subnets 10.0.1-2.0/24   Fargate tasks + RDS. No public IPs.
                                      └── 0.0.0.0/0 ──▶ NAT ──▶ IGW ──▶ internet
                                      └── S3 prefix ──▶ S3 gateway endpoint (free)
 ```
@@ -49,7 +49,7 @@ the task ENI. Outbound is unchanged from the operator's point of view:
 |---|---|
 | FMP, Alpha Vantage, Apify (HTTPS) | private subnet → NAT → IGW |
 | ECR image layers (S3-backed) | S3 gateway endpoint, bypasses NAT |
-| Secrets Manager, CloudWatch Logs | private subnet → NAT → IGW |
+| SSM Parameter Store, CloudWatch Logs | private subnet → NAT → IGW |
 | RDS | stays inside the VPC |
 
 The task security group is **egress-only** — all protocols to `0.0.0.0/0`, zero
@@ -66,9 +66,10 @@ from `terraform-aws-modules/vpc` 6.6.0, composed in `main.tf`.
 
 1. **Image** — GitHub Actions builds `MQSMaster/Dockerfile` and pushes to ECR. Both
    task definitions reference the same image URI.
-2. **Secrets** — ECS pulls DB credentials and API keys from Secrets Manager at task
-   start and injects them as container environment variables. The task *execution*
-   role holds `secretsmanager:GetSecretValue`; the task role does not.
+2. **Secrets** — ECS pulls DB credentials and API keys from SSM Parameter Store
+   (SecureString) at task start and injects them as container environment
+   variables. The task *execution* role holds `ssm:GetParameters` scoped to the
+   nine parameter ARNs; the task role does not.
 3. **Database** — the RDS security group accepts Postgres traffic only from the
    Fargate task security group. There is no public endpoint.
 4. **Logs** — both workloads write to `/ecs/mqsmaster-prod`, separated by stream
@@ -76,26 +77,63 @@ from `terraform-aws-modules/vpc` 6.6.0, composed in `main.tf`.
 
 ## Secret wiring
 
-`locals.tf` is the single source of truth for what ECS injects. Adding a key to
-`container_secrets` propagates it to both task definitions:
+Each credential is its own SecureString parameter. Parameter Store has no
+equivalent of the Secrets Manager `:json-key::` selector, so one parameter holds
+exactly one value and its leaf name is the environment variable name:
 
-```hcl
-container_secrets = concat(
-  [for k in ["db_user", "password", "host", "port", "database", "sslmode"] : {
-    name = k, valueFrom = "${module.secrets_manager.db_secret_arn}:${k}::"
-  }],
-  [for k in ["FMP_API_KEY", "ALPHA_KEY", "APIFY_KEY"] : {
-    name = k, valueFrom = "${module.secrets_manager.api_secret_arn}:${k}::"
-  }],
-)
+```
+/mqsmaster-prod/db/{db_user,password,host,port,database,sslmode}
+/mqsmaster-prod/api/{FMP_API_KEY,ALPHA_KEY,APIFY_KEY}
 ```
 
-The DB secret's `host`/`port` are overwritten at apply time with the provisioned
-RDS endpoint, so `db_secret_values.host` in `terraform.tfvars` is ignored.
+`modules/ssm-parameters` owns the key lists (`local.db_keys`, `local.api_keys`)
+and exports `parameter_arns`, a map of env var name => parameter ARN. `locals.tf`
+turns that map straight into the ECS `secrets` block, so adding a credential in
+the module propagates to both task definitions:
 
-> The secret version carries `ignore_changes = [secret_string]` so console
-> rotations survive `terraform apply`. The trade-off: if RDS is ever **replaced**
-> and gets a new endpoint, the secret must be updated by hand. See
+```hcl
+container_secrets = [
+  for name, arn in module.ssm_parameters.parameter_arns : {
+    name      = name
+    valueFrom = arn
+  }
+]
+```
+
+Parameters use the AWS-managed `alias/aws/ssm` key, which is why the execution
+role needs no `kms:Decrypt`. Pointing the module's `kms_key_id` at a customer
+managed key would require adding that grant, or tasks fail to start.
+
+Credential values are never stored in Terraform state. Under the old Secrets
+Manager arrangement `secret_string` sat in state in plaintext, readable by anyone
+with access to the state file; `value_wo` removes that exposure entirely — the
+provider explicitly nulls the `value` attribute on read whenever a write-only
+value is in use.
+
+The RDS master password gets the same treatment (`password_wo` /
+`password_wo_version` in `modules/rds-postgres`), since the plain `password`
+argument is also persisted to state. Its version counter is wired to
+`db_parameter_version`, so a single bump rotates the database password and
+`/mqsmaster-prod/db/password` together rather than letting them drift.
+
+**What write-only does not cover.** Root variable values still appear in
+cleartext inside *saved plan files* — `terraform plan -out=tf.plan` followed by
+`terraform show -json tf.plan` exposes `.variables.db_secret_values.value`,
+`sensitive = true` notwithstanding. That is inherent to Terraform variables, not
+to these resources, and it applies to the API keys too. Treat any `-out` plan
+file as secret material: don't commit one, don't attach one to a PR, delete it
+after use. Plain `terraform plan` with no `-out` writes nothing to disk.
+
+The DB `host`/`port` parameters are overwritten at apply time with the
+provisioned RDS endpoint, so `db_secret_values.host` in `terraform.tfvars` is
+ignored.
+
+> Values are **write-only** (`value_wo`): sent to AWS but never persisted to
+> state or plan files, and invisible to Terraform's differ. Updates fire only
+> when `value_wo_version` changes, so console/CLI rotations survive
+> `terraform apply` without needing `ignore_changes`. The trade-off: if RDS is
+> ever **replaced** and gets a new endpoint, `/mqsmaster-prod/db/host` does not
+> self-heal — bump `db_parameter_version`. See
 > [operations.md](operations.md#rotating-secrets).
 
 ## Scheduling
@@ -127,9 +165,12 @@ curl and jq into the image removes that cushion; shift to 11:05 if you do.
 
 ## Image caveats
 
-`MQSMaster/.dockerignore` currently excludes `NLP/`, `RBP/`, and `scripts/`. The
-NLP service needs `NLP/` inside the image — **remove those exclusions before
-building** or the NLP task fails with `FileNotFoundError`.
+`MQSMaster/.dockerignore` excludes `scripts/`, `workflows/`, and `NLP/articles/`.
+`NLP/` and `RBP/` are **no longer** wholesale-excluded, so the NLP service finds
+its code — the earlier `FileNotFoundError` hazard is resolved. Nothing under
+`src/`, `NLP/` or `RBP/` imports from `scripts/`, so that exclusion is safe.
+`.env` is excluded too, which is correct: the market task writes a fresh one from
+the ECS-injected secrets before `start.sh` runs.
 
 The runtime stage (`python:3.12-slim`) ships without `curl` and `jq`, both
 required by `start.sh`. The market task installs them at runtime via `apt-get`

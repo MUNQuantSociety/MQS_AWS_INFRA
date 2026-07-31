@@ -47,14 +47,19 @@ output "log_group_name" {
   value       = module.cloudwatch_logs.log_group_name
 }
 
-output "db_secret_arn" {
-  description = "Secrets Manager ARN for DB credentials."
-  value       = module.secrets_manager.db_secret_arn
+output "db_parameter_path" {
+  description = "SSM Parameter Store path holding the DB credentials."
+  value       = module.ssm_parameters.db_parameter_path
 }
 
-output "api_secret_arn" {
-  description = "Secrets Manager ARN for API keys."
-  value       = module.secrets_manager.api_secret_arn
+output "api_parameter_path" {
+  description = "SSM Parameter Store path holding the third-party API keys."
+  value       = module.ssm_parameters.api_parameter_path
+}
+
+output "parameter_arns" {
+  description = "Map of container environment variable name => SSM parameter ARN."
+  value       = module.ssm_parameters.parameter_arns
 }
 
 output "task_security_group_id" {
