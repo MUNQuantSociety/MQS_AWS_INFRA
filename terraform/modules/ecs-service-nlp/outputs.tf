@@ -14,8 +14,8 @@ output "service_name" {
 }
 
 output "service_arn" {
-  description = "NLP ECS service ARN."
-  value       = aws_ecs_service.this.id
+  description = "NLP ECS service ARN. Uses .arn, not .id -- IAM policies (the github-oidc deploy role) match on the long-form ARN, and .id is only incidentally equal to it."
+  value       = aws_ecs_service.this.arn
 }
 
 output "container_name" {

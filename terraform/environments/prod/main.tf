@@ -158,6 +158,26 @@ module "ecs_service_nlp" {
   aws_region              = var.aws_region
 }
 
+###############################################################################
+# CI/CD identity. The deploy workflow (.github/workflows/deploy.yml, which must
+# live in the MQSMaster repo alongside its Dockerfile) assumes this role via
+# OIDC -- no static AWS access keys anywhere. Feed the deploy_role_arn output
+# into that repo's AWS_DEPLOY_ROLE_ARN secret.
+###############################################################################
+
+module "github_oidc" {
+  source = "../../modules/github-oidc"
+
+  name_prefix       = local.name_prefix
+  github_repository = var.github_repository
+  allowed_refs      = var.github_allowed_refs
+
+  ecr_repository_arn      = module.ecr_repository.repository_arn
+  nlp_service_arn         = module.ecs_service_nlp.service_arn
+  task_execution_role_arn = module.iam_roles.task_execution_role_arn
+  task_role_arn           = module.iam_roles.task_role_arn
+}
+
 module "eventbridge_scheduler" {
   source = "../../modules/eventbridge-scheduler"
 
