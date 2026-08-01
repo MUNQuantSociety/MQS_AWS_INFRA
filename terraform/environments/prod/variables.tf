@@ -21,6 +21,22 @@ variable "environment" {
 }
 
 ###############################################################################
+# CI/CD (GitHub Actions OIDC)
+###############################################################################
+
+variable "github_repository" {
+  description = "Repository running deploy.yml, as \"owner/repo\". This is the repo holding MQSMaster's Dockerfile, not this infra repo."
+  type        = string
+  default     = "MUNQuantSociety/MQSMaster"
+}
+
+variable "github_allowed_refs" {
+  description = "OIDC subject suffixes allowed to assume the deploy role. Default pins to main, which covers both the push and workflow_dispatch triggers."
+  type        = list(string)
+  default     = ["ref:refs/heads/main"]
+}
+
+###############################################################################
 # Networking
 ###############################################################################
 

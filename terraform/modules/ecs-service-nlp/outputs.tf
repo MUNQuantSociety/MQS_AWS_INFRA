@@ -14,8 +14,8 @@ output "service_name" {
 }
 
 output "service_arn" {
-  description = "NLP ECS service ARN."
-  value       = aws_ecs_service.this.id
+  description = "NLP ECS service ARN. Uses .arn explicitly for clarity; aws_ecs_service.id is also the service ARN."
+  value       = aws_ecs_service.this.arn
 }
 
 output "container_name" {
