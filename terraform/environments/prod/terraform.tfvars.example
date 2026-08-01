@@ -42,8 +42,13 @@ db_allocated_storage       = 200             # GB. Set 300 for more headroom.
 db_max_allocated_storage   = 300             # autoscale ceiling; == allocated to disable.
 db_multi_az                = false           # true = HA standby, ~2x cost.
 db_backup_retention_period = 7
-db_deletion_protection     = false # set true for prod
-db_skip_final_snapshot     = true  # set false for prod
+# Prod-safe. deletion_protection = true makes `terraform destroy` FAIL until you
+# flip it back and apply -- that is the point. skip_final_snapshot = false takes
+# a snapshot named <name_prefix>-postgres-final on delete; that name is fixed, so
+# delete or rename an old snapshot before a second teardown or RDS rejects it.
+# For a throwaway environment, invert both.
+db_deletion_protection     = true
+db_skip_final_snapshot     = false
 
 # Cron fires at local clock time in schedule_timezone (DST-aware).
 # 11:00 America/St_Johns == 09:30 ET market open (Newfoundland is ET+1:30).
