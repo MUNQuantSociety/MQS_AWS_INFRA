@@ -64,6 +64,19 @@ resource "aws_lb_target_group" "this" {
   # creating the replacement first would break that reference mid-apply.
   lifecycle {
     create_before_destroy = true
+
+    # Both listeners are conditional -- HTTP on enable_http_listener, HTTPS on a
+    # non-null certificate. Turning off the first without supplying the second
+    # builds a load balancer with NO listeners, leaving this target group
+    # attached to nothing. Terraform reports success, and the failure surfaces
+    # one resource later when the ECS service tries to register:
+    #   InvalidParameterException: The target group with targetGroupArn ... does
+    #   not have an associated load balancer
+    # Fail at plan time with an explanation instead.
+    precondition {
+      condition     = var.enable_http_listener || var.certificate_arn != null
+      error_message = "The ALB would have no listeners: enable_http_listener is false and certificate_arn is null. Set certificate_arn to serve HTTPS, re-enable the HTTP listener, or set enable_alb = false to drop the load balancer entirely."
+    }
   }
 }
 

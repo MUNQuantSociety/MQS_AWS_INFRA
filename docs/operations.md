@@ -1,12 +1,29 @@
 # Operations runbook
 
-All commands assume `terraform/environments/prod` as the working directory and a
+All commands assume `terraform/environments/Livetrading` as the working directory and a
 configured AWS profile in `us-east-2`.
+
+> **One-time action after the `prod` → `Livetrading` rename.**
+> This stack's state lives in the HCP Terraform workspace `MQS_AWS_INFRA`, whose
+> **Terraform Working Directory** setting still points at the old
+> `terraform/environments/prod`. Update it to
+> `terraform/environments/Livetrading` in the workspace's General Settings.
+>
+> Terraform cannot do this for you — it is a workspace setting, not
+> configuration. If the workspace is VCS-driven, skipping this makes the next
+> run fail to find configuration files, or plan against an empty directory and
+> propose destroying every managed resource. Confirm the setting before merging
+> the rename.
+>
+> The `Backtest_Visualizer` stack is unaffected: it declares no `cloud` block
+> and needs a **separate** workspace of its own. Two stacks must never share one
+> workspace — one workspace holds one state, so each stack's plan would propose
+> destroying the other's resources.
 
 ## Deploy
 
 ```bash
-cd terraform/environments/prod
+cd terraform/environments/Livetrading
 cp terraform.tfvars.example terraform.tfvars   # fill real secret values
 terraform init -upgrade                        # -upgrade required: AWS provider is now ~> 6.28
 terraform plan
@@ -170,7 +187,7 @@ runs ET+1:30.
 The layout supports it without touching module code:
 
 ```bash
-cp -r terraform/environments/prod terraform/environments/staging
+cp -r terraform/environments/Livetrading terraform/environments/staging
 # edit staging/terraform.tfvars: environment = "staging", smaller sizing
 ```
 

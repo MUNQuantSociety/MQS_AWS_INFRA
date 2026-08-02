@@ -18,7 +18,7 @@
 # being clobbered by the next apply. To deliberately re-seed from tfvars, bump
 # the counter.
 #
-# Write-only arguments require Terraform >= 1.11 (see environments/prod/terraform.tf).
+# Write-only arguments require Terraform >= 1.11 (see the stack terraform.tf).
 #
 # Standard-tier SecureString parameters carry no storage charge, and at standard
 # throughput no per-API-call charge either.

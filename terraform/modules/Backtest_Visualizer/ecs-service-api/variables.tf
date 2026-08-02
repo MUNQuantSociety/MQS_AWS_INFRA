@@ -93,7 +93,15 @@ variable "has_nat_egress" {
 }
 
 variable "target_group_arn" {
-  description = "ALB target group to register tasks into. null runs the service with no load balancer (reachable only via the task's ephemeral public IP)."
+  description = <<EOT
+ALB target group to register tasks into.
+
+null runs the service with no load balancer, which also means NO INBOUND PATH:
+the task security group's only ingress rule references the ALB security group,
+so nothing reaches the task even though it holds a public IP. That IP is an
+egress path only. In this mode the container is observable through CloudWatch
+Logs and `aws ecs execute-command` (see enable_execute_command), not over HTTP.
+EOT
   type        = string
   default     = null
 }

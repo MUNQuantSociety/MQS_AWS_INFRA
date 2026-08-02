@@ -54,9 +54,14 @@ variable "enable_alb" {
 Create an Application Load Balancer (~$16/mo + LCUs) in front of the service.
 
 On by default because a Fargate task's public IP changes on every deployment,
-leaving no stable endpoint for the frontend. Set false only for short-lived
-smoke tests where reading the task's current IP from the ECS console is
-acceptable.
+leaving no stable endpoint for the frontend.
+
+Setting this false leaves the API with NO INBOUND PATH AT ALL -- it does not
+fall back to reaching the task on its public IP. The task security group's only
+ingress rule references the ALB security group, so with no ALB nothing can
+connect; the public IP carries egress only. Use false when you want the task
+running and observable through CloudWatch Logs / `aws ecs execute-command`
+without exposing an endpoint, not as a cheaper way to serve traffic.
 EOT
   type        = bool
   default     = true
