@@ -3,7 +3,7 @@
 ###############################################################################
 
 module "ecr_repository" {
-  source = "../../modules/ecr-repository"
+  source = "../../modules/Livetrading/ecr-repository"
 
   repository_name = var.ecr_repository_name
 }
@@ -56,7 +56,7 @@ module "vpc" {
 }
 
 module "networking" {
-  source = "../../modules/networking"
+  source = "../../modules/Livetrading/networking"
 
   name_prefix = local.name_prefix
   vpc_id      = module.vpc.vpc_id
@@ -69,7 +69,7 @@ module "networking" {
 }
 
 module "rds_postgres" {
-  source = "../../modules/rds-postgres"
+  source = "../../modules/Livetrading/rds-postgres"
 
   name_prefix            = local.name_prefix
   vpc_id                 = module.vpc.vpc_id
@@ -96,7 +96,7 @@ module "rds_postgres" {
 }
 
 module "ssm_parameters" {
-  source = "../../modules/ssm-parameters"
+  source = "../../modules/Livetrading/ssm-parameters"
 
   name_prefix           = local.name_prefix
   db_secret_values      = local.db_secret_values
@@ -106,27 +106,27 @@ module "ssm_parameters" {
 }
 
 module "iam_roles" {
-  source = "../../modules/iam-roles"
+  source = "../../modules/Livetrading/iam-roles"
 
   name_prefix    = local.name_prefix
   parameter_arns = module.ssm_parameters.parameter_arn_list
 }
 
 module "cloudwatch_logs" {
-  source = "../../modules/cloudwatch-logs"
+  source = "../../modules/Livetrading/cloudwatch-logs"
 
   log_group_name    = local.log_group
   retention_in_days = var.log_retention_days
 }
 
 module "ecs_cluster" {
-  source = "../../modules/ecs-cluster"
+  source = "../../modules/Livetrading/ecs-cluster"
 
   name_prefix = local.name_prefix
 }
 
 module "ecs_task_market" {
-  source = "../../modules/ecs-task-market"
+  source = "../../modules/Livetrading/ecs-task-market"
 
   name_prefix             = local.name_prefix
   image_uri               = local.image_uri
@@ -140,7 +140,7 @@ module "ecs_task_market" {
 }
 
 module "ecs_service_nlp" {
-  source = "../../modules/ecs-service-nlp"
+  source = "../../modules/Livetrading/ecs-service-nlp"
 
   name_prefix             = local.name_prefix
   image_uri               = local.image_uri
@@ -166,7 +166,7 @@ module "ecs_service_nlp" {
 ###############################################################################
 
 module "github_oidc" {
-  source = "../../modules/github-oidc"
+  source = "../../modules/Livetrading/github-oidc"
 
   name_prefix       = local.name_prefix
   github_repository = var.github_repository
@@ -179,7 +179,7 @@ module "github_oidc" {
 }
 
 module "eventbridge_scheduler" {
-  source = "../../modules/eventbridge-scheduler"
+  source = "../../modules/Livetrading/eventbridge-scheduler"
 
   name_prefix                          = local.name_prefix
   schedule_expression                  = var.schedule_expression
