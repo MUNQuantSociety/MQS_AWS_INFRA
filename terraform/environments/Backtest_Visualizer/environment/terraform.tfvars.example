@@ -1,0 +1,110 @@
+# Copy to terraform.tfvars and fill in real values. Do NOT commit terraform.tfvars.
+#
+#   cp terraform.tfvars.example terraform.tfvars
+
+aws_region   = "us-east-2"
+project_name = "mqs-btv"
+environment  = "prod"
+
+# ECR repository is CREATED by this config. If one of this name already exists in
+# the account, rename here or import it -- otherwise the first apply fails with
+# RepositoryAlreadyExistsException.
+ecr_repository_name = "mqs-backtest-visualizer"
+image_tag           = "latest"
+
+# -----------------------------------------------------------------------------
+# Networking -- no NAT gateway, no private subnets.
+#
+# Tasks sit in these public subnets with a public IP and egress through the IGW.
+# That saves the ~$32/mo NAT gateway, and costs you a stable egress IP: the task
+# IP is drawn from the Amazon pool and changes on every deployment. If the
+# external market_data Postgres filters by source address, this will not work --
+# see ../../README.md.
+#
+# 10.20.0.0/16 avoids MQSMaster's 10.0.0.0/16 so the two VPCs could be peered.
+# -----------------------------------------------------------------------------
+vpc_cidr            = "10.20.0.0/16"
+public_subnet_cidrs = ["10.20.1.0/24", "10.20.2.0/24"] # two AZs: ALB requires it
+
+# Narrow this once the frontend's egress range is known.
+alb_ingress_cidr_blocks = ["0.0.0.0/0"]
+
+# -----------------------------------------------------------------------------
+# Load balancer. ~$16/mo + LCUs -- the largest line item in this stack, and the
+# only stable endpoint the frontend can point at.
+# -----------------------------------------------------------------------------
+enable_alb           = true
+enable_http_listener = true
+health_check_path    = "/api/v1/health"
+
+# Set an ACM cert ARN to serve HTTPS (port 80 then redirects to 443). Leave null
+# only while getting the stack up: without it, Supabase JWTs cross the wire in
+# plaintext.
+# certificate_arn = "arn:aws:acm:us-east-2:<account>:certificate/<id>"
+
+# -----------------------------------------------------------------------------
+# API task
+# -----------------------------------------------------------------------------
+container_port = 8000
+task_cpu       = "512"  # .5 vCPU
+task_memory    = "1024" # 1 GB
+
+# 0 until an image exists in the repository above. A non-zero count against an
+# empty repository leaves ECS retrying CannotPullContainerError forever.
+# After the first push:
+#   aws ecs update-service --cluster <cluster> --service <service> --desired-count 1
+desired_count = 0
+
+# Live shell into a running task via `aws ecs execute-command`. Leave false in prod.
+enable_execute_command = false
+
+# S3 bucket for run artifacts (CSV/parquet). The bucket is not created here.
+# artifact_bucket_arn = "arn:aws:s3:::mqs-backtest-artifacts"
+
+# -----------------------------------------------------------------------------
+# Application configuration (non-secret; visible in the task definition)
+# -----------------------------------------------------------------------------
+log_level       = "INFO"
+cors_origins    = ["https://REPLACE_ME.vercel.app"]
+market_timezone = "America/New_York"
+
+# Drives SUPABASE_URL, SUPABASE_JWKS_URL and JWT_ISSUER. Empty string omits them.
+supabase_project_ref = "REPLACE_ME"
+
+max_concurrent_runs_per_user = 3
+max_backtest_window_days     = 1825
+rate_limit_per_minute        = 60
+
+log_retention_days         = 14
+container_insights_enabled = true
+
+# -----------------------------------------------------------------------------
+# Secrets -> SSM Parameter Store.
+#
+# MARKET_DATA_USER must be a READ-ONLY role: the visualizer reads bars and must
+# never write to the trading tables.
+#
+# MARKET_DATA_SSLMODE: use "require" or stronger over the public internet.
+# "prefer" silently falls back to an unencrypted connection.
+# -----------------------------------------------------------------------------
+market_data_secret_values = {
+  MARKET_DATA_HOST     = "REPLACE_ME" # must be reachable from the internet
+  MARKET_DATA_PORT     = "5432"
+  MARKET_DATA_DB       = "REPLACE_ME"
+  MARKET_DATA_USER     = "REPLACE_ME" # read-only role
+  MARKET_DATA_PASSWORD = "REPLACE_ME"
+  MARKET_DATA_SSLMODE  = "require"
+}
+
+api_secret_values = {
+  FMP_API_KEY       = "REPLACE_ME"
+  SUPABASE_ANON_KEY = "REPLACE_ME"
+}
+
+# Credential values above are write-only: they never enter Terraform state or
+# plan output, which also means Terraform cannot tell when you change one.
+# After editing a value above, BUMP the matching counter or apply is a no-op.
+# Bumping rewrites every parameter in that group, discarding out-of-band
+# rotations -- to rotate a single credential, prefer `aws ssm put-parameter`.
+market_data_parameter_version = 1
+api_parameter_version         = 1
