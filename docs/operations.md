@@ -3,22 +3,27 @@
 All commands assume `terraform/environments/Livetrading` as the working directory and a
 configured AWS profile in `us-east-2`.
 
-> **One-time action after the `prod` → `Livetrading` rename.**
-> This stack's state lives in the HCP Terraform workspace `MQS_AWS_INFRA`, whose
-> **Terraform Working Directory** setting still points at the old
-> `terraform/environments/prod`. Update it to
-> `terraform/environments/Livetrading` in the workspace's General Settings.
+> **Two one-time actions before the next apply.**
 >
-> Terraform cannot do this for you — it is a workspace setting, not
-> configuration. If the workspace is VCS-driven, skipping this makes the next
-> run fail to find configuration files, or plan against an empty directory and
-> propose destroying every managed resource. Confirm the setting before merging
-> the rename.
+> **1. Workspace repoint.** This stack now binds to the HCP workspace
+> `MQS_AWS_INFRA_LIVE` (`terraform/environments/Livetrading/terraform.tf`). Its
+> previous state lives in `MQS_AWS_INFRA`. Unless that state has already been
+> migrated to — or the workspace renamed as — `MQS_AWS_INFRA_LIVE`, the new
+> workspace is empty and the next plan proposes **creating a second copy of live
+> infrastructure**. Confirm before running apply.
 >
-> The `Backtest_Visualizer` stack is unaffected: it declares no `cloud` block
-> and needs a **separate** workspace of its own. Two stacks must never share one
-> workspace — one workspace holds one state, so each stack's plan would propose
-> destroying the other's resources.
+> **2. Working directory.** After the `prod` → `Livetrading` rename, the
+> workspace's **Terraform Working Directory** setting must read
+> `terraform/environments/Livetrading`. Terraform cannot change a workspace
+> setting — if the workspace is VCS-driven, a stale path makes the next run fail
+> to find configuration, or plan against an empty directory and propose
+> destroying every managed resource.
+>
+> The `Backtest_Visualizer` stack has its own workspace, `MQS_AWS_INFRA_BTV`,
+> which must exist before its first `terraform init`, and its own working
+> directory `terraform/environments/Backtest_Visualizer`. Two stacks must never
+> share one workspace — one workspace holds one state, so each stack's plan
+> would propose destroying the other's resources.
 
 ## Deploy
 

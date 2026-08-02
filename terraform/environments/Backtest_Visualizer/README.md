@@ -123,16 +123,22 @@ credentials — `aws sts get-caller-identity` must succeed first.
 
 ### State backend
 
-`backend.tf` is **commented out**, so state is local. That is deliberate: it
-keeps `init`/`validate` runnable without credentials or an HCP token.
+State lives in HCP Terraform. `terraform.tf` binds this stack to the workspace
+**`MQS_AWS_INFRA_BTV`** in the `MQS` organization, which must exist before
+`terraform init`.
 
-Local state is not acceptable for shared infrastructure. Uncomment either the HCP
-Terraform block or the S3 block, then re-run `terraform init` to migrate.
+That workspace is deliberately **separate** from Livetrading's
+`MQS_AWS_INFRA_LIVE`. One workspace holds one state, so pointing both stacks at
+a single workspace would make each one's plan propose destroying the other's
+resources.
 
-**This stack needs its own HCP workspace** — it must not reuse
-`MQS_AWS_INFRA`, which holds Livetrading's state. One workspace holds one state;
-pointing both stacks at it would make each one's plan propose destroying the
-other's resources.
+`backend.tf` holds no configuration — only a commented S3 alternative for taking
+this stack off HCP.
+
+Provider requirements are shared with the other stack: `versions.tf` is a symlink
+to `../../shared/versions.tf`. `required_version` is intentionally not pinned, so
+the workspace's own Terraform version governs — but the floor is **1.11.0**,
+because the SSM parameters use write-only `value_wo` arguments introduced there.
 
 ### First deploy
 
