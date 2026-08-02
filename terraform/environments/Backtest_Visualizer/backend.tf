@@ -1,32 +1,31 @@
 # State backend.
 #
-# DECISION REQUIRED BEFORE THE FIRST APPLY.
+# There is no configuration in this file. The `cloud` block now comes from
+# ../../shared/terraform.tf, symlinked into this directory as terraform.tf --
+# a root module may declare only one, so it must not be repeated here.
 #
-# Left unconfigured on purpose: with no block here Terraform uses local state,
-# which is what makes `terraform init` and `terraform validate` runnable without
-# credentials or an HCP token. Local state is NOT acceptable for shared infra.
+# !! READ THIS BEFORE THE FIRST APPLY !!
 #
-# Note the asymmetry with the sibling stack: environments/Livetrading declares a
-# `cloud` block bound to the MQS_AWS_INFRA workspace, so it has remote state and
-# remote runs. This stack does not, and the two must NOT share a workspace -- one
-# workspace holds one state, and pointing both here would have each stack's plan
-# propose destroying the other's resources.
+# The shared file binds by workspace NAME, which means this stack and
+# environments/Livetrading resolve to the SAME HCP workspace and therefore the
+# same state file. They are two different root modules. Applying both in turn is
+# mutually destructive: whichever runs second finds a state full of resources
+# that its own configuration does not declare, and plans to destroy every one of
+# them.
 #
-# Option A -- HCP Terraform, matching Livetrading. Needs a SEPARATE workspace
-# created in the MQS org first (e.g. MQS_BACKTEST_VISUALIZER), and
-# `terraform login`. Note this must live in a `terraform` block; if you enable
-# it, move it into terraform.tf or delete that file's duplicate settings.
+# The fix is one line in ../../shared/terraform.tf -- bind by tag instead of
+# name, so the file stays shared while each stack gets its own workspace:
 #
-# terraform {
-#   cloud {
-#     organization = "MQS"
-#     workspaces {
-#       name = "MQS_BACKTEST_VISUALIZER"
-#     }
+#   workspaces {
+#     tags = ["mqs"]
 #   }
-# }
 #
-# Option B -- S3 + native locking (no DynamoDB table needed on AWS provider 6.x).
+# Then `terraform init` in each directory selects (or creates) that stack's own
+# workspace.
+#
+# If you would rather keep this stack off HCP entirely, delete the symlinked
+# terraform.tf here, give this directory its own copy without a `cloud` block,
+# and uncomment the S3 backend below.
 #
 # terraform {
 #   backend "s3" {
