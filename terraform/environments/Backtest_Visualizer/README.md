@@ -23,7 +23,7 @@ change made for one stack cannot alter the other.
 | --- | --- |
 | `terraform-aws-modules/vpc/aws` (registry, pinned `6.6.0`) | VPC, internet gateway, 2 public subnets, route tables |
 | `security-groups` | ALB + service security groups |
-| `alb` | Application Load Balancer, target group, HTTP (and optional HTTPS) listeners |
+| `alb` | Application Load Balancer, target group, HTTPS listener (and an optional HTTP redirect) |
 | `ecr-repository` | ECR repository + lifecycle policy for the API image |
 | `ssm-parameters` | SecureString parameters for the external DB and third-party credentials |
 | `iam-roles` | ECS task execution role (image pull, SSM read, logs) and task role |
@@ -135,10 +135,14 @@ resources.
 `backend.tf` holds no configuration — only a commented S3 alternative for taking
 this stack off HCP.
 
-Provider requirements are shared with the other stack: `versions.tf` is a symlink
-to `../../shared/versions.tf`. `required_version` is intentionally not pinned, so
-the workspace's own Terraform version governs — but the floor is **1.11.0**,
-because the SSM parameters use write-only `value_wo` arguments introduced there.
+`terraform.tf` carries this stack's `cloud` block and its provider requirements.
+Both stacks declare their own — they were briefly shared through a symlinked
+`../../shared/versions.tf`, which coupled each root module to a file outside its
+own directory for the sake of six duplicated lines.
+
+`required_version` is `>= 1.11.0`, because the SSM parameters use write-only
+`value_wo` arguments introduced in that release. It is a floor, not a pin: the
+workspace's own Terraform version still governs which release runs.
 
 ### First deploy
 

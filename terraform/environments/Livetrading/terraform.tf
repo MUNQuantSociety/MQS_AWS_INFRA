@@ -1,20 +1,38 @@
-# Cloud backend for the Livetrading stack.
+# Terraform settings for the Livetrading stack.
 #
-# Provider requirements are shared with the other stack and live in
-# ../../shared/versions.tf, symlinked into this directory as versions.tf.
-# Terraform merges the two `terraform` blocks.
+# Provider requirements are declared inline here rather than shared with the
+# Backtest_Visualizer stack. They were briefly held in a single
+# terraform/shared/versions.tf symlinked into both directories; that saved one
+# duplicated block at the cost of a root module whose configuration depended on
+# a file outside its own directory. Two stacks that must be free to move their
+# provider pins independently is the normal case, and duplicating six lines is
+# cheaper than the coupling.
 #
-# required_version is omitted on purpose so this workspace's own Terraform
-# version governs. The real floor is 1.11.0 (write-only `value_wo` arguments in
-# modules/Livetrading/ssm-parameters) -- see versions.tf.
+# The `cloud` block is per stack because the two bind to different workspaces --
+# `workspaces { name = ... }` takes a literal string, and one workspace holds one
+# state, so sharing it would make each stack's plan propose destroying the
+# other's resources.
 #
-# !! This stack's existing state lives in the workspace MQS_AWS_INFRA. Pointing
-# it at MQS_AWS_INFRA_LIVE below binds it to a DIFFERENT workspace. Unless that
-# state has already been migrated, the new workspace is empty and the next plan
-# proposes creating a second copy of live infrastructure. Confirm the migration
-# (or that MQS_AWS_INFRA_LIVE already holds this state) before running apply.
+# The workspace formerly known as MQS_AWS_INFRA has been RENAMED to
+# MQS_AWS_INFRA_LIVE, so it carries this stack's existing state. A rename keeps
+# the state in place -- no migration was needed.
 
 terraform {
+  # >= 1.11 is required for write-only arguments: aws_ssm_parameter.value_wo in
+  # modules/Livetrading/ssm-parameters and aws_db_instance.password_wo in
+  # modules/Livetrading/rds-postgres. This is a floor, not a pin -- the HCP
+  # workspace's own Terraform version still governs which release runs, but a
+  # workspace or local CLI below 1.11 now fails with a version error instead of
+  # mid-plan with "Unsupported argument: value_wo".
+  required_version = ">= 1.11.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 6.28"
+    }
+  }
+
   cloud {
 
     organization = "MQS"

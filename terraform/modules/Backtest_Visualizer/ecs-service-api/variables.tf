@@ -106,12 +106,6 @@ EOT
   default     = null
 }
 
-variable "health_check_path" {
-  description = "Unauthenticated path returning 200 when the app is ready. Probed by the ALB target group, which lives outside the container and needs nothing from the image."
-  type        = string
-  default     = "/api/v1/health"
-}
-
 variable "container_health_check_command" {
   description = <<EOT
 ECS container health check command, e.g.

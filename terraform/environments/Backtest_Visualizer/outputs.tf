@@ -1,5 +1,8 @@
 output "api_base_url" {
   description = "Base URL for the API. Hand this to the frontend repo. null when enable_alb = false."
+
+  # http:// is reachable only on a dev stack with no certificate; prod and
+  # staging cannot plan without one.
   value = var.enable_alb ? (
     var.certificate_arn == null
     ? "http://${module.alb[0].dns_name}"

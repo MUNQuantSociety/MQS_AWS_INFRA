@@ -11,8 +11,22 @@ locals {
   # is the bare parameter ARN -- Parameter Store has no equivalent of the Secrets
   # Manager `:json-key::` selector.
   #
-  # The key list lives in modules/Backtest_Visualizer/ssm-parameters; adding a credential there
-  # propagates here and into the task definition automatically.
+  # The key list lives in modules/Backtest_Visualizer/ssm-parameters; adding a
+  # credential there propagates into this list and into the NEXT task definition
+  # revision Terraform writes.
+  #
+  # It does NOT reach a running task on its own. The task definition carries
+  # ignore_changes = [container_definitions] and the service carries
+  # ignore_changes = [task_definition], so after the first apply Terraform shows
+  # no diff for a new credential and reports success while the service keeps
+  # running the old revision. That is deliberate -- it exists so a CI deploy can
+  # own the revision -- but this stack has no CI pipeline yet, so until one
+  # exists a credential (or image_tag, or cors_origins) change has to be rolled
+  # out by hand:
+  #
+  #   aws ecs update-service --cluster <name> --service <name> --force-new-deployment
+  #
+  # See modules/Backtest_Visualizer/ecs-service-api.
   container_secrets = [
     for name, arn in module.ssm_parameters.parameter_arns : {
       name      = name

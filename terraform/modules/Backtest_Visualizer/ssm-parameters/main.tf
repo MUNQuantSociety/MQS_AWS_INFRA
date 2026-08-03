@@ -63,7 +63,7 @@ resource "aws_ssm_parameter" "market_data" {
 
   # null selects the AWS-managed alias/aws/ssm key, which needs no kms:Decrypt
   # grant on the task execution role. Setting a CMK here means adding that grant
-  # (see modules/iam-roles) or tasks fail to start.
+  # (see modules/Backtest_Visualizer/iam-roles) or tasks fail to start.
   key_id = var.kms_key_id
 }
 

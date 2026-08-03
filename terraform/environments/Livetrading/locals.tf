@@ -19,7 +19,7 @@ locals {
   # variable name, so valueFrom is the bare parameter ARN -- Parameter Store has
   # no equivalent of the Secrets Manager `:json-key::` selector.
   #
-  # The key list now lives in modules/ssm-parameters; adding a credential there
+  # The key list now lives in modules/Livetrading/ssm-parameters; adding a credential there
   # propagates here and into both task definitions automatically.
   container_secrets = [
     for name, arn in module.ssm_parameters.parameter_arns : {

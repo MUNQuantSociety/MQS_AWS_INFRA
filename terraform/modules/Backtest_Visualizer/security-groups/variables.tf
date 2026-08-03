@@ -20,7 +20,7 @@ variable "ingress_cidr_blocks" {
 }
 
 variable "enable_http_listener" {
-  description = "Open port 80 on the ALB group. Set false once TLS is in place to force HTTPS."
+  description = "Open port 80 on the ALB group. Leave true only while port 80 is a redirect to HTTPS or while TLS is not yet in place; set false to force HTTPS. Serving plaintext here puts Supabase JWTs on the wire in the clear."
   type        = bool
   default     = true
 }

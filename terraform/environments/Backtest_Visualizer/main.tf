@@ -160,8 +160,9 @@ module "ecs_service_api" {
   assign_public_ip = true
   has_nat_egress   = false
 
-  target_group_arn  = var.enable_alb ? module.alb[0].target_group_arn : null
-  health_check_path = var.health_check_path
+  # The readiness probe lives on the ALB target group, not in the container --
+  # see module.alb above. Nothing about it reaches the task definition.
+  target_group_arn = var.enable_alb ? module.alb[0].target_group_arn : null
 
   enable_execute_command = var.enable_execute_command
   container_secrets      = local.container_secrets
