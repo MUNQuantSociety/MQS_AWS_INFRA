@@ -15,7 +15,20 @@ configured AWS profile in `us-east-2`.
 > An earlier local state exists in this stack's directory as `terraform.tfstate`
 > (gitignored, `serial=56`) and tracks **zero** resources — the stack was managed
 > locally, then emptied. It was never migrated to HCP, and there is nothing in it
-> to migrate. `terraform init` may offer to copy it up; accepting is harmless.
+> to migrate. `terraform init` may offer to copy it up. Accepting is harmless
+> **only while both sides are empty** — re-check before agreeing, because these
+> facts age:
+>
+> ```bash
+> terraform state list                    # local: expect no output
+> terraform workspace show                # confirm which workspace you are bound to
+> ```
+>
+> If either side tracks resources, **stop**. Copying a populated local state into
+> a workspace that already has one silently picks a winner, and the losing
+> resources become untracked — still running, no longer managed. Reconcile
+> deliberately (`terraform state pull` / `push`, or import) instead of accepting
+> the prompt.
 >
 > So `terraform apply` is a **full create**, not an incremental change. Budget for
 > it: a VPC with one NAT gateway (~$32/mo at `single_nat_gateway = true`), an RDS
@@ -34,8 +47,23 @@ configured AWS profile in `us-east-2`.
 > aws iam list-open-id-connect-providers   # expect an empty list
 > ```
 >
-> If that list is ever non-empty, adopt the existing provider instead of letting
-> Terraform create a second one:
+> A non-empty list does **not** by itself mean the GitHub provider exists — the
+> account may hold providers for other identity providers entirely. Check each
+> ARN's `Url` and act only on an exact match for
+> `token.actions.githubusercontent.com`:
+>
+> ```bash
+> for arn in $(aws iam list-open-id-connect-providers \
+>       --query 'OpenIDConnectProviderList[].Arn' --output text); do
+>   printf '%s -> %s\n' "$arn" \
+>     "$(aws iam get-open-id-connect-provider --open-id-connect-provider-arn "$arn" \
+>        --query Url --output text)"
+> done
+> ```
+>
+> Import only the ARN whose `Url` is exactly
+> `token.actions.githubusercontent.com`. Providers for any other URL are
+> unrelated — leave them unmanaged and let Terraform create the GitHub one.
 >
 > ```bash
 > terraform import module.github_oidc.aws_iam_openid_connect_provider.github \
