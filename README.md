@@ -30,7 +30,8 @@ MQS_AWS_INFRA/
 │   └── cost-model.md
 └── terraform/
     ├── environments/
-    │   └── prod/                           # One state file per environment
+    │   ├── Backtest_Visualizer/            # Visualizer API: Fargate + ALB, no NAT, external DB
+    │   └── Livetrading/                    # One state file per environment
     │       ├── main.tf                     # Module composition
     │       ├── locals.tf                   # name_prefix, log group, secret wiring
     │       ├── variables.tf                # All input variables
@@ -39,24 +40,50 @@ MQS_AWS_INFRA/
     │       ├── terraform.tf                # Terraform + provider version pins
     │       ├── backend.tf                  # S3 + DynamoDB backend stub
     │       └── terraform.tfvars.example    # Copy → terraform.tfvars
-    └── modules/
-        ├── networking/                     # Egress-only task SG + free S3 gateway endpoint
-        ├── ecr-repository/                 # ECR repo + lifecycle policy
-        ├── iam-roles/                      # Task execution + task roles, ssm:GetParameters policy
-        ├── ssm-parameters/                 # DB credentials + API keys (SSM SecureString params)
-        ├── cloudwatch-logs/                # Log group + retention
-        ├── rds-postgres/                   # RDS instance, subnet group, DB SG
-        ├── ecs-cluster/                    # Cluster + Fargate capacity providers
-        ├── ecs-task-market/                # Market-hours task definition
-        ├── ecs-service-nlp/                # Always-on task definition + ECS Service
-        └── eventbridge-scheduler/          # Scheduler/Rule + RunTask IAM role
+    └── modules/                            # Split by owning stack — see below
+        ├── Livetrading/
+        │   ├── networking/                 # Egress-only task SG + free S3 gateway endpoint
+        │   ├── ecr-repository/             # ECR repo + lifecycle policy
+        │   ├── iam-roles/                  # Task execution + task roles, ssm:GetParameters policy
+        │   ├── ssm-parameters/             # DB credentials + API keys (SSM SecureString params)
+        │   ├── cloudwatch-logs/            # Log group + retention
+        │   ├── rds-postgres/               # RDS instance, subnet group, DB SG
+        │   ├── ecs-cluster/                # Cluster + Fargate capacity providers
+        │   ├── ecs-task-market/            # Market-hours task definition
+        │   ├── ecs-service-nlp/            # Always-on task definition + ECS Service
+        │   ├── github-oidc/                # GitHub Actions OIDC provider + deploy role
+        │   └── eventbridge-scheduler/      # Scheduler/Rule + RunTask IAM role
+        └── Backtest_Visualizer/
+            ├── security-groups/            # ALB + task SGs (VPC comes from the registry module)
+            ├── alb/                        # Load balancer, target group, listeners
+            ├── ecr-repository/             # ECR repo (created, not adopted) + lifecycle policy
+            ├── iam-roles/                  # Task roles + optional S3 artifact / ECS Exec grants
+            ├── ssm-parameters/             # External market_data + third-party credentials
+            ├── cloudwatch-logs/            # Log group + retention
+            ├── ecs-cluster/                # Cluster + Fargate capacity providers
+            └── ecs-service-api/            # API task definition + ECS Service
 ```
 
+**Two independent stacks.** `Livetrading` runs the trading bot, the NLP service
+and RDS in private subnets behind a single NAT gateway. `Backtest_Visualizer`
+runs the visualizer API on Fargate behind an ALB with **no NAT gateway** and no
+database of its own. They share no state, no VPC and no modules — being in one
+repository does not put them on one network.
+
+**Why modules are split by stack rather than pooled.** Six module names overlap,
+but only some are the same thing (`networking` decorates a VPC in one stack and
+*is* the VPC in the other). More importantly, `Livetrading` has live state: a
+shared module edited for one stack would change resource addresses in the
+other's state, destroying and recreating real resources. The split makes that
+impossible. The cost is that `cloudwatch-logs`, `ecs-cluster`, `iam-roles` and
+`ecr-repository` exist in both trees and drift independently.
+
 **Conventions.** Module directories are kebab-case and named for the AWS service
-they own (`ecs-service-nlp`, not `nlp_service`). Terraform identifiers — module
-labels, variables, outputs — stay snake_case per the HashiCorp style guide. Every
-module has the same three files: `main.tf`, `variables.tf`, `outputs.tf`, and
-exposes exactly one resource group.
+they own (`ecs-service-nlp`, not `nlp_service`); the two top-level directories
+under `modules/` are named for the stack that consumes them. Terraform
+identifiers — module labels, variables, outputs — stay snake_case per the
+HashiCorp style guide. Every module has the same three files: `main.tf`,
+`variables.tf`, `outputs.tf`, and exposes exactly one resource group.
 
 Adding an environment is a directory copy — see
 [operations.md](docs/operations.md#adding-a-new-environment).
@@ -75,7 +102,7 @@ Adding an environment is a directory copy — see
 ## Quickstart
 
 ```bash
-cd terraform/environments/prod && cp terraform.tfvars.example terraform.tfvars && terraform init -upgrade && terraform plan
+cd terraform/environments/Livetrading && cp terraform.tfvars.example terraform.tfvars && terraform init -upgrade && terraform plan
 ```
 
 Full deploy steps in [docs/operations.md](docs/operations.md#deploy).

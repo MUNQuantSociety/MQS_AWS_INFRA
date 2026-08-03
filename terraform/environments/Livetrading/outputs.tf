@@ -7,6 +7,11 @@ output "ecr_repository_url" {
   value       = module.ecr_repository.repository_url
 }
 
+output "github_deploy_role_arn" {
+  description = "Set this as the AWS_DEPLOY_ROLE_ARN secret on the repo running deploy.yml."
+  value       = module.github_oidc.deploy_role_arn
+}
+
 output "ecs_cluster_name" {
   description = "ECS cluster name."
   value       = module.ecs_cluster.cluster_name

@@ -24,7 +24,7 @@
 # console/CLI rotation is never clobbered by a later apply. To deliberately
 # re-seed from terraform.tfvars, bump db_parameter_version / api_parameter_version.
 #
-# Write-only arguments require Terraform >= 1.11 (see environments/prod/terraform.tf).
+# Write-only arguments require Terraform >= 1.11 (see the stack terraform.tf).
 #
 # Standard-tier SecureString parameters carry no storage charge, and at standard
 # throughput there is no per-API-call charge either.

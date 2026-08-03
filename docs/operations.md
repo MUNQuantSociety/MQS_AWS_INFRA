@@ -1,12 +1,34 @@
 # Operations runbook
 
-All commands assume `terraform/environments/prod` as the working directory and a
+All commands assume `terraform/environments/Livetrading` as the working directory and a
 configured AWS profile in `us-east-2`.
+
+> **Two one-time actions before the next apply.**
+>
+> **1. Workspace repoint.** This stack now binds to the HCP workspace
+> `MQS_AWS_INFRA_LIVE` (`terraform/environments/Livetrading/terraform.tf`). Its
+> previous state lives in `MQS_AWS_INFRA`. Unless that state has already been
+> migrated to — or the workspace renamed as — `MQS_AWS_INFRA_LIVE`, the new
+> workspace is empty and the next plan proposes **creating a second copy of live
+> infrastructure**. Confirm before running apply.
+>
+> **2. Working directory.** After the `prod` → `Livetrading` rename, the
+> workspace's **Terraform Working Directory** setting must read
+> `terraform/environments/Livetrading`. Terraform cannot change a workspace
+> setting — if the workspace is VCS-driven, a stale path makes the next run fail
+> to find configuration, or plan against an empty directory and propose
+> destroying every managed resource.
+>
+> The `Backtest_Visualizer` stack has its own workspace, `MQS_AWS_INFRA_BTV`,
+> which must exist before its first `terraform init`, and its own working
+> directory `terraform/environments/Backtest_Visualizer`. Two stacks must never
+> share one workspace — one workspace holds one state, so each stack's plan
+> would propose destroying the other's resources.
 
 ## Deploy
 
 ```bash
-cd terraform/environments/prod
+cd terraform/environments/Livetrading
 cp terraform.tfvars.example terraform.tfvars   # fill real secret values
 terraform init -upgrade                        # -upgrade required: AWS provider is now ~> 6.28
 terraform plan
@@ -170,7 +192,7 @@ runs ET+1:30.
 The layout supports it without touching module code:
 
 ```bash
-cp -r terraform/environments/prod terraform/environments/staging
+cp -r terraform/environments/Livetrading terraform/environments/staging
 # edit staging/terraform.tfvars: environment = "staging", smaller sizing
 ```
 
