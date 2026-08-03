@@ -11,10 +11,11 @@ image_tag           = "1.0.5-4"
 # CI/CD. github_repository is the repo GitHub Actions RUNS deploy.yml in -- the
 # MQSMaster repo with the Dockerfile, not this one. A fork's OIDC tokens carry a
 # different owner/repo and will be rejected, so change this if you build from a
-# fork. github_allowed_refs defaults to main only; widening it (e.g. adding
-# "pull_request") lets more workflow runs assume the deploy role.
+# fork. github_allowed_refs defaults to main and dev (deploy.yml lands on dev);
+# widening it further (e.g. adding "pull_request") lets more workflow runs
+# assume the deploy role.
 github_repository   = "MUNQuantSociety/MQSMaster"
-# github_allowed_refs = ["ref:refs/heads/main"]
+# github_allowed_refs = ["ref:refs/heads/main", "ref:refs/heads/dev"]
 
 # Networking. Defaults build a dedicated VPC: workloads in private subnets,
 # IGW + one NAT gateway in the public subnets. All optional - omit to accept

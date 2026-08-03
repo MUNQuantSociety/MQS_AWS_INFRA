@@ -31,9 +31,9 @@ variable "github_repository" {
 }
 
 variable "github_allowed_refs" {
-  description = "OIDC subject suffixes allowed to assume the deploy role. Default pins to main, which covers both the push and workflow_dispatch triggers."
+  description = "OIDC subject suffixes allowed to assume the deploy role. Defaults to main and dev: deploy.yml now lands on dev, and each ref covers both the push and workflow_dispatch triggers on that branch."
   type        = list(string)
-  default     = ["ref:refs/heads/main"]
+  default     = ["ref:refs/heads/main", "ref:refs/heads/dev"]
 }
 
 ###############################################################################
