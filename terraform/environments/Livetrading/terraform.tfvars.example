@@ -42,7 +42,7 @@ nlp_task_cpu      = "512"  # .5 vCPU
 nlp_task_memory   = "2048" # 2 GB - FinBERT base floor
 nlp_desired_count = 1
 
-log_retention_days = 1
+log_retention_days = 7
 
 # RDS PostgreSQL. 4 GB RAM = 2 vCPU burstable.
 db_engine_version          = "16"
