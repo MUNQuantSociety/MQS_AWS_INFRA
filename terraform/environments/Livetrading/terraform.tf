@@ -13,9 +13,12 @@
 # state, so sharing it would make each stack's plan propose destroying the
 # other's resources.
 #
-# The workspace formerly known as MQS_AWS_INFRA has been RENAMED to
-# MQS_AWS_INFRA_LIVE, so it carries this stack's existing state. A rename keeps
-# the state in place -- no migration was needed.
+# This stack binds to MQS_AWS_INFRA_LIVE, which holds NO state as of 2026-08-03:
+# zero resources, zero state versions, and no run has ever executed. An earlier
+# local terraform.tfstate in this directory (serial=56) also tracks zero
+# resources -- the stack was managed locally and then emptied, and nothing was
+# ever migrated here. The first apply against this workspace is a full create of
+# the whole stack, not an incremental change. See docs/operations.md.
 
 terraform {
   # >= 1.11 is required for write-only arguments: aws_ssm_parameter.value_wo in
