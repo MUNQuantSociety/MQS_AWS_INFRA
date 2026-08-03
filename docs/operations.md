@@ -15,7 +15,33 @@ configured AWS profile in `us-east-2`.
 > An earlier local state exists in this stack's directory as `terraform.tfstate`
 > (gitignored, `serial=56`) and tracks **zero** resources — the stack was managed
 > locally, then emptied. It was never migrated to HCP, and there is nothing in it
-> to migrate. `terraform init` may offer to copy it up; accepting is harmless.
+> to migrate. `terraform init` may offer to copy it up. Accepting is safe **only
+> when the source is a state you have approved and the destination is empty** —
+> re-check both before agreeing, because these facts age.
+>
+> Inspect the two sides separately. Do not use `terraform state list` for this:
+> it reports whichever state is currently configured — the local file before
+> `init`, the remote workspace after — so it silently answers a different question
+> depending on when you run it.
+>
+> ```bash
+> # Source: read the local file directly, independent of any backend config.
+> jq -r '"serial=\(.serial) resources=\((.resources // []) | length)"' terraform.tfstate
+>
+> # Destination: confirm the workspace you are bound to, then its resource count.
+> grep -A6 'cloud {' terraform.tf        # organization + workspace name
+> ```
+>
+> Read the destination count from the workspace's page in HCP, or via the API —
+> `GET /api/v2/organizations/<org>/workspaces/<name>`, field
+> `attributes.resource-count`.
+>
+> Proceed only when the destination is empty. If **either** side tracks
+> resources, **stop**: copying a populated local state into a workspace that
+> already holds one silently picks a winner, and the losing resources keep
+> running while nothing manages them. Reconcile deliberately with
+> `terraform state pull` / `push` or targeted imports instead of accepting the
+> prompt.
 >
 > So `terraform apply` is a **full create**, not an incremental change. Budget for
 > it: a VPC with one NAT gateway (~$32/mo at `single_nat_gateway = true`), an RDS
@@ -31,11 +57,37 @@ configured AWS profile in `us-east-2`.
 > apply fails partway with `EntityAlreadyExists`. Confirm before applying:
 >
 > ```bash
-> aws iam list-open-id-connect-providers   # expect an empty list
+> aws iam list-open-id-connect-providers || echo "LOOKUP FAILED - do not proceed"
 > ```
 >
-> If that list is ever non-empty, adopt the existing provider instead of letting
-> Terraform create a second one:
+> Expect an empty list. Treat a **failed** call as unknown, not as empty: an
+> `AccessDenied` prints nothing to stdout, which reads identically to "no
+> providers" and would send you into an apply that then dies on
+> `EntityAlreadyExists`.
+>
+> A non-empty list does **not** by itself mean the GitHub provider exists — the
+> account may hold providers for other identity providers entirely. Check each
+> ARN's `Url` and act only on an exact match for
+> `token.actions.githubusercontent.com`:
+>
+> ```bash
+> set -eu
+> arns=$(aws iam list-open-id-connect-providers \
+>          --query 'OpenIDConnectProviderList[].Arn' --output text)   # aborts on failure
+> for arn in $arns; do
+>   url=$(aws iam get-open-id-connect-provider \
+>           --open-id-connect-provider-arn "$arn" --query Url --output text)
+>   printf '%s -> %s\n' "$arn" "$url"
+> done
+> ```
+>
+> `set -eu` is the point: without it a failed lookup prints an empty `url` and the
+> loop carries on, so an error is indistinguishable from a provider whose URL does
+> not match.
+>
+> Import only the ARN whose `Url` is exactly
+> `token.actions.githubusercontent.com`. Providers for any other URL are
+> unrelated — leave them unmanaged and let Terraform create the GitHub one.
 >
 > ```bash
 > terraform import module.github_oidc.aws_iam_openid_connect_provider.github \
