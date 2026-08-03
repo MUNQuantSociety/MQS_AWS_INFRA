@@ -6,12 +6,21 @@
 ###############################################################################
 
 locals {
-  # Build the bash one-liner that materialises .env from ECS-injected env vars.
-  # `$$` escapes Terraform interpolation so bash sees a literal `$`. Driven off
-  # var.container_secrets so adding a new secret in root automatically flows
-  # through with no further edits here.
+  # Build the bash one-liner that materialises .env from ECS-injected env vars,
+  # producing one `echo "NAME=$NAME"` per secret. Driven off var.container_secrets
+  # so adding a secret in root flows through with no further edits here.
+  #
+  # format(), not a template string. The obvious spelling is a trap:
+  #
+  #   "echo \"${s.name}=$${s.name}\""   ->   echo "DB_HOST=${s.name}"
+  #
+  # `$$` escapes the interpolation, so the SECOND occurrence emits the literal
+  # text `${s.name}` instead of the shell expansion `$DB_HOST` that was meant.
+  # Every line of the generated .env then reads `NAME=${s.name}` and no real
+  # credential ever lands in the file. format() has no template escaping, so the
+  # `$` stays a plain character and bash does the expansion.
   env_writer = join("; ", [
-    for s in var.container_secrets : "echo \"${s.name}=$${s.name}\""
+    for s in var.container_secrets : format("echo \"%s=$%s\"", s.name, s.name)
   ])
 }
 

@@ -11,7 +11,7 @@
 # refuses the combination rather than letting it fail at runtime.
 #
 # Ingress is still closed: the service security group accepts the container port
-# from the ALB security group only (see modules/networking). The public IP is an
+# from the ALB security group only (see modules/Backtest_Visualizer/security-groups). The public IP is an
 # egress path, not a front door.
 ###############################################################################
 
@@ -117,7 +117,7 @@ resource "aws_ecs_service" "this" {
   launch_type     = "FARGATE"
 
   # Lets `aws ecs execute-command` open a shell in a running task. Requires the
-  # matching SSM channel permissions on the task role (modules/iam-roles).
+  # matching SSM channel permissions on the task role (modules/Backtest_Visualizer/iam-roles).
   enable_execute_command = var.enable_execute_command
 
   network_configuration {

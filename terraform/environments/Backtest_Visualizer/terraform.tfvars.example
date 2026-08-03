@@ -26,21 +26,35 @@ image_tag           = "latest"
 vpc_cidr            = "10.20.0.0/16"
 public_subnet_cidrs = ["10.20.1.0/24", "10.20.2.0/24"] # two AZs: ALB requires it
 
-# Narrow this once the frontend's egress range is known.
+# Reaches the ALB on 443. World-open because the Vercel frontend has no fixed
+# egress range; narrow it if the API should not be world-reachable.
 alb_ingress_cidr_blocks = ["0.0.0.0/0"]
 
 # -----------------------------------------------------------------------------
 # Load balancer. ~$16/mo + LCUs -- the largest line item in this stack, and the
 # only stable endpoint the frontend can point at.
+#
+# REQUIRED on environment = "prod" or "staging": certificate_arn must name an
+# ACM cert in aws_region covering the hostname the frontend calls. Those
+# environments serve HTTPS only -- no plaintext fallback, because the API
+# carries Supabase JWTs -- and the plan fails until this is set. Use
+# enable_alb = false to build no load balancer at all (no inbound path; logs
+# and ECS exec only).
+#
+# On environment = "dev" the cert is optional, so the stack can come up before
+# a domain exists. Drop certificate_arn and set enable_http_listener = true:
+#
+#   environment          = "dev"
+#   enable_http_listener = true   # plaintext; the only listener without a cert
+#
 # -----------------------------------------------------------------------------
-enable_alb           = true
-enable_http_listener = true
-health_check_path    = "/api/v1/health"
+enable_alb        = true
+health_check_path = "/api/v1/health"
+certificate_arn   = "arn:aws:acm:us-east-2:<account>:certificate/<id>"
 
-# Set an ACM cert ARN to serve HTTPS (port 80 then redirects to 443). Leave null
-# only while getting the stack up: without it, Supabase JWTs cross the wire in
-# plaintext.
-# certificate_arn = "arn:aws:acm:us-east-2:<account>:certificate/<id>"
+# Port 80, closed by default. With a cert set, true adds a 301 to HTTPS -- never
+# plaintext -- so a bare hostname still resolves.
+enable_http_listener = false
 
 # -----------------------------------------------------------------------------
 # API task

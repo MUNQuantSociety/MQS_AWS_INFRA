@@ -19,7 +19,7 @@ module "ecr_repository" {
 #   - ecs_service_nlp (always-on) and ecs_task_market (scheduled) call out to
 #     FMP, Alpha Vantage and Apify over HTTPS.
 #   - Path: private subnet -> 0.0.0.0/0 route -> NAT gateway -> IGW -> internet.
-#   - The task SG (modules/networking) allows all egress, so no per-host
+#   - The task SG (modules/Livetrading/networking) allows all egress, so no per-host
 #     allowlisting is required; adding a new data provider needs no VPC change.
 #
 # The only traffic that does NOT take the NAT is S3 (and therefore ECR image

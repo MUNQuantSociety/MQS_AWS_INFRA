@@ -94,7 +94,7 @@ variable "ecr_repository_name" {
 Name of the existing ECR repository holding the MQSMaster container image.
 
 The repository is NOT created by Terraform -- it predates this config and is
-adopted via a data source (see modules/ecr-repository). It must already exist in
+adopted via a data source (see modules/Livetrading/ecr-repository). It must already exist in
 aws_region, or plan fails with RepositoryNotFoundException.
 EOT
   type        = string

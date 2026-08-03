@@ -15,9 +15,17 @@ variable "project_name" {
 }
 
 variable "environment" {
-  description = "Deployment environment (prod, staging, dev)."
+  description = "Deployment environment. Only \"dev\" may run the ALB without a TLS certificate -- see certificate_arn."
   type        = string
   default     = "prod"
+
+  # Closed set on purpose: certificate_arn's validation keys off this string, so
+  # a typo ("prd", "Dev") must not silently land in the lenient branch and serve
+  # plaintext. Anything unrecognised fails the plan instead.
+  validation {
+    condition     = contains(["prod", "staging", "dev"], var.environment)
+    error_message = "environment must be one of: prod, staging, dev."
+  }
 }
 
 ###############################################################################
@@ -37,10 +45,21 @@ variable "public_subnet_cidrs" {
   description = "Public subnet CIDRs. Both the ALB and the Fargate tasks live here. Two AZs minimum -- an ALB requires it."
   type        = list(string)
   default     = ["10.20.1.0/24", "10.20.2.0/24"]
+
+  # locals.azs is sliced to this list's length, so one CIDR means one AZ. Without
+  # this the apply gets as far as creating the VPC, subnets and security groups
+  # and then fails at aws_lb.this with "At least two subnets in two different
+  # Availability Zones must be specified", leaving a half-built stack. The old
+  # hand-rolled networking module enforced this; the registry VPC module has no
+  # equivalent, so it belongs here.
+  validation {
+    condition     = length(var.public_subnet_cidrs) >= 2
+    error_message = "public_subnet_cidrs needs at least two entries: an Application Load Balancer requires subnets in at least two availability zones."
+  }
 }
 
 variable "alb_ingress_cidr_blocks" {
-  description = "Source CIDRs allowed to reach the ALB. Narrow this if the API should not be world-reachable."
+  description = "Source CIDRs allowed to reach the ALB on 443 (and on 80 when enable_http_listener is true). World-open by default because the frontend is Vercel-hosted with no fixed egress range; narrow it if the API should not be world-reachable."
   type        = list(string)
   default     = ["0.0.0.0/0"]
 }
@@ -68,15 +87,55 @@ EOT
 }
 
 variable "enable_http_listener" {
-  description = "Serve port 80. With certificate_arn set, port 80 redirects to HTTPS instead of serving plaintext. Set false to close it entirely."
+  description = <<EOT
+Open port 80 on the ALB.
+
+Off by default. With a certificate present a port 80 listener only issues a 301
+to HTTPS -- it never serves plaintext -- so turning this on is a convenience for
+visitors typing a bare hostname.
+
+On environment = "dev" with no certificate this is the only way to serve at all,
+and it must be set true explicitly: plaintext is never implicit.
+EOT
   type        = bool
-  default     = true
+  default     = false
+
+  # The ALB module refuses to build a load balancer with no listeners
+  # (modules/Backtest_Visualizer/alb/main.tf). That combination is reachable
+  # here only in the dev-without-cert case, so catch it with a message that
+  # names the fix instead of letting the module's generic one surface.
+  validation {
+    condition     = !var.enable_alb || var.certificate_arn != null || var.enable_http_listener
+    error_message = "The ALB would have no listeners: no certificate_arn, and enable_http_listener is false. On environment = \"dev\" set enable_http_listener = true to serve plaintext HTTP, or supply certificate_arn to serve HTTPS."
+  }
 }
 
 variable "certificate_arn" {
-  description = "ACM certificate ARN for HTTPS. null leaves the ALB on plaintext HTTP -- acceptable to get running, not to ship, since Supabase JWTs would cross the wire in the clear."
+  description = <<EOT
+ACM certificate ARN for the HTTPS listener. Required when enable_alb = true,
+unless environment = "dev".
+
+The API carries Supabase JWTs, so a plaintext endpoint puts bearer tokens on the
+wire in the clear. Rather than defaulting to HTTP and trusting an operator to
+turn TLS on later, prod and staging refuse to plan an ALB without a certificate.
+The cert must live in this stack's region (var.aws_region) and cover the
+hostname the frontend will call.
+
+dev is exempt so the stack can be stood up before a domain exists: an ACM cert
+needs a domain you own and DNS validation, which is a hard blocker on work that
+has nothing to do with TLS. A dev stack must then also set
+enable_http_listener = true, since HTTP is its only remaining listener.
+
+Leave null with enable_alb = false in any environment -- that builds no load
+balancer and therefore no inbound path at all.
+EOT
   type        = string
   default     = null
+
+  validation {
+    condition     = !var.enable_alb || var.certificate_arn != null || var.environment == "dev"
+    error_message = "certificate_arn is required when enable_alb = true on environment prod or staging: the ALB serves HTTPS only there, and Supabase JWTs must not cross the wire in plaintext. Supply an ACM certificate ARN in this region, set enable_alb = false to build no load balancer, or use environment = \"dev\" for a pre-domain stack."
+  }
 }
 
 variable "health_check_path" {

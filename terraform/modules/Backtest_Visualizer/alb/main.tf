@@ -8,9 +8,13 @@
 # bare task cannot do without shipping certificates into the container.
 #
 # COST: ~$16/mo for the load balancer hour plus LCU charges. It is the single
-# largest line item in this stack. Set enable_alb = false in the root module if
-# you are only smoke-testing the service and can live with reading the task's
-# current public IP out of the ECS console.
+# largest line item in this stack. enable_alb = false in the root module drops
+# it, but that is NOT a cheaper way to serve traffic: the task security group's
+# only ingress rule references the ALB security group, so with no ALB there is
+# no inbound path at all -- reading the task's public IP out of the ECS console
+# gets you nothing, because the container port is closed to everything. Use it
+# only to run the task observably (CloudWatch Logs, `aws ecs execute-command`)
+# without exposing an endpoint. See the enable_alb variable in the root module.
 #
 # target_type = "ip" is required for awsvpc/Fargate: targets are ENI addresses,
 # not instance IDs.
