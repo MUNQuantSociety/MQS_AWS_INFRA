@@ -16,7 +16,7 @@ variable "github_repository" {
 variable "allowed_refs" {
   description = "GitHub OIDC subject suffixes permitted to assume the role, e.g. [\"ref:refs/heads/main\"]. Each is appended to \"repo:<owner>/<repo>:\". Widen with care -- \"*\" admits every branch, tag and pull request."
   type        = list(string)
-  default     = ["ref:refs/heads/main"]
+  default     = ["ref:refs/heads/main", "ref:refs/heads/dev"]
 }
 
 variable "ecr_repository_arn" {

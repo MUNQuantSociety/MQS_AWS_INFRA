@@ -23,9 +23,12 @@ resource "aws_iam_openid_connect_provider" "github" {
 # Trust is scoped on two claims:
 #   aud -- must be sts.amazonaws.com, the audience configure-aws-credentials
 #          requests. Without this, any GitHub token for any audience is accepted.
-#   sub -- pins the exact repo AND ref. `ref:refs/heads/main` covers both of
-#          deploy.yml's triggers (push to main, and workflow_dispatch run on
-#          main). A fork's tokens carry a different repo in sub and are rejected.
+#   sub -- pins the exact repo AND ref. deploy.yml lives on `dev`, so both
+#          `ref:refs/heads/dev` and `ref:refs/heads/main` are allowed; each ref
+#          covers both of that branch's triggers (push, and a workflow_dispatch
+#          run on it). A fork's tokens carry a different repo in sub and are
+#          rejected. Listing two refs is still a pin -- the role is reachable
+#          from exactly these two branches, not from tags or pull requests.
 #
 # Widening sub to `repo:<owner>/<repo>:*` would let ANY branch, tag or pull
 # request in the repo assume this role -- including a PR branch from a fork.
