@@ -59,7 +59,7 @@ One behavioural change: outbound traffic now leaves from the NAT gateway's
 Elastic IP rather than a per-task public IP. If a provider IP-allowlists you,
 that EIP is the address to register, and it is stable across task restarts.
 
-`modules/networking` owns the task SG and the S3 endpoint; the VPC itself comes
+`modules/Livetrading/networking` owns the task SG and the S3 endpoint; the VPC itself comes
 from `terraform-aws-modules/vpc` 6.6.0, composed in `main.tf`.
 
 ## Data flow
@@ -86,7 +86,7 @@ exactly one value and its leaf name is the environment variable name:
 /mqsmaster-prod/api/{FMP_API_KEY,ALPHA_KEY,APIFY_KEY}
 ```
 
-`modules/ssm-parameters` owns the key lists (`local.db_keys`, `local.api_keys`)
+`modules/Livetrading/ssm-parameters` owns the key lists (`local.db_keys`, `local.api_keys`)
 and exports `parameter_arns`, a map of env var name => parameter ARN. `locals.tf`
 turns that map straight into the ECS `secrets` block, so adding a credential in
 the module propagates to both task definitions:
@@ -111,7 +111,7 @@ provider explicitly nulls the `value` attribute on read whenever a write-only
 value is in use.
 
 The RDS master password gets the same treatment (`password_wo` /
-`password_wo_version` in `modules/rds-postgres`), since the plain `password`
+`password_wo_version` in `modules/Livetrading/rds-postgres`), since the plain `password`
 argument is also persisted to state. Its version counter is wired to
 `db_parameter_version`, so a single bump rotates the database password and
 `/mqsmaster-prod/db/password` together rather than letting them drift.
@@ -174,7 +174,7 @@ the ECS-injected secrets before `start.sh` runs.
 
 The runtime stage (`python:3.12-slim`) ships without `curl` and `jq`, both
 required by `start.sh`. The market task installs them at runtime via `apt-get`
-(see `terraform/modules/ecs-task-market/main.tf`). Baking them into the image
+(see `terraform/modules/Livetrading/ecs-task-market/main.tf`). Baking them into the image
 removes that cold-start cost:
 
 ```dockerfile

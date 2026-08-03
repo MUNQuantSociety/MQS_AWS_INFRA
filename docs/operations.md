@@ -3,21 +3,32 @@
 All commands assume `terraform/environments/Livetrading` as the working directory and a
 configured AWS profile in `us-east-2`.
 
-> **Two one-time actions before the next apply.**
+> **Before the next apply.**
 >
-> **1. Workspace repoint.** This stack now binds to the HCP workspace
-> `MQS_AWS_INFRA_LIVE` (`terraform/environments/Livetrading/terraform.tf`). Its
-> previous state lives in `MQS_AWS_INFRA`. Unless that state has already been
-> migrated to — or the workspace renamed as — `MQS_AWS_INFRA_LIVE`, the new
-> workspace is empty and the next plan proposes **creating a second copy of live
-> infrastructure**. Confirm before running apply.
+> **Workspace — done.** `MQS_AWS_INFRA` has been **renamed** to
+> `MQS_AWS_INFRA_LIVE`, which is what
+> `terraform/environments/Livetrading/terraform.tf` now binds to. A rename keeps
+> the state in place, so no migration was needed and the next plan sees the live
+> resources it already manages.
 >
-> **2. Working directory.** After the `prod` → `Livetrading` rename, the
+> **1. Working directory.** After the `prod` → `Livetrading` rename, the
 > workspace's **Terraform Working Directory** setting must read
 > `terraform/environments/Livetrading`. Terraform cannot change a workspace
 > setting — if the workspace is VCS-driven, a stale path makes the next run fail
 > to find configuration, or plan against an empty directory and propose
 > destroying every managed resource.
+>
+> **2. GitHub OIDC provider.** `module.github_oidc` is newly wired into this
+> stack and creates `aws_iam_openid_connect_provider.github`, which is
+> **account-global**. If `token.actions.githubusercontent.com` already exists in
+> the account, the apply fails partway with `EntityAlreadyExists` — after other
+> changes have landed. Check first, and import instead of creating:
+>
+> ```bash
+> aws iam list-open-id-connect-providers   # look for token.actions.githubusercontent.com
+> terraform import module.github_oidc.aws_iam_openid_connect_provider.github \
+>   arn:aws:iam::<account-id>:oidc-provider/token.actions.githubusercontent.com
+> ```
 >
 > The `Backtest_Visualizer` stack has its own workspace, `MQS_AWS_INFRA_BTV`,
 > which must exist before its first `terraform init`, and its own working
@@ -189,12 +200,39 @@ runs ET+1:30.
 
 ## Adding a new environment
 
-The layout supports it without touching module code:
+The layout supports it without touching module code.
+
+Copy the **tracked** files only — never `cp -r`. The live directory also holds
+`terraform.tfvars`, `terraform.tfstate`, and `.terraform/`, all gitignored; a
+recursive copy would clone live credentials and live state into the new
+environment.
 
 ```bash
-cp -r terraform/environments/Livetrading terraform/environments/staging
-# edit staging/terraform.tfvars: environment = "staging", smaller sizing
+mkdir -p terraform/environments/staging
+git -C terraform/environments/Livetrading ls-files -z \
+  | xargs -0 -I{} cp terraform/environments/Livetrading/{} terraform/environments/staging/{}
+
+# start staging's tfvars from the placeholders, not from the live file
+cp terraform/environments/staging/terraform.tfvars.example \
+   terraform/environments/staging/terraform.tfvars
+chmod 600 terraform/environments/staging/terraform.tfvars
+# edit staging/terraform.tfvars: environment = "staging", smaller sizing, and
+# credentials issued for staging — do not reuse the live ones
 ```
 
-Each environment keeps its own state and `terraform.tfvars`. Module sources
-(`../../modules/...`) resolve identically from any environment directory.
+**Then change the workspace name — this step is not optional.** The copy brings
+`terraform.tf` with it, and that file hardcodes
+`cloud { workspaces { name = "MQS_AWS_INFRA_LIVE" } }`. Left as-is, the new
+directory binds to **production state**, and its first plan reads staging's
+smaller sizing out of `terraform.tfvars` and proposes modifying the live RDS
+instance and ECS services. Create a new workspace and point the copy at it:
+
+```bash
+# in staging/terraform.tf
+#   workspaces { name = "MQS_AWS_INFRA_STAGING" }
+```
+
+Only after that does each environment keep its own state and `terraform.tfvars`
+— one workspace holds one state, so the binding is what separates them, not the
+directory. Module sources (`../../modules/Livetrading/...`) resolve identically
+from any environment directory.

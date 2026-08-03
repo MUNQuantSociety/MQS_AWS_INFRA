@@ -31,15 +31,16 @@ MQS_AWS_INFRA/
 └── terraform/
     ├── environments/
     │   ├── Backtest_Visualizer/            # Visualizer API: Fargate + ALB, no NAT, external DB
-    │   └── Livetrading/                    # One state file per environment
+    │   └── Livetrading/                    # Trading bot + NLP + RDS, private subnets behind one NAT
     │       ├── main.tf                     # Module composition
     │       ├── locals.tf                   # name_prefix, log group, secret wiring
     │       ├── variables.tf                # All input variables
     │       ├── outputs.tf                  # Top-level outputs
     │       ├── providers.tf                # AWS provider + default tags
-    │       ├── terraform.tf                # Terraform + provider version pins
-    │       ├── backend.tf                  # S3 + DynamoDB backend stub
+    │       ├── terraform.tf                # HCP `cloud` block + version pins (one workspace = one state)
+    │       ├── backend.tf                  # S3 backend stub (alternative to HCP)
     │       └── terraform.tfvars.example    # Copy → terraform.tfvars
+    │   (Backtest_Visualizer holds the same file set.)
     └── modules/                            # Split by owning stack — see below
         ├── Livetrading/
         │   ├── networking/                 # Egress-only task SG + free S3 gateway endpoint
