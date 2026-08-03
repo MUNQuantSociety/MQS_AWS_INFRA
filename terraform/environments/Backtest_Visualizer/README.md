@@ -125,7 +125,10 @@ credentials — `aws sts get-caller-identity` must succeed first.
 
 State lives in HCP Terraform. `terraform.tf` binds this stack to the workspace
 **`MQS_AWS_INFRA_BTV`** in the `MQS` organization, which must exist before
-`terraform init`.
+`terraform init`. It does exist, with its working directory already set to
+`/terraform/environments/Backtest_Visualizer`, and holds **no state** as of
+2026-08-03 — zero resources and no run has ever executed, so the first apply
+here is a full create.
 
 That workspace is deliberately **separate** from Livetrading's
 `MQS_AWS_INFRA_LIVE`. One workspace holds one state, so pointing both stacks at

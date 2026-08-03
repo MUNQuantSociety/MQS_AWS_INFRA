@@ -3,38 +3,56 @@
 All commands assume `terraform/environments/Livetrading` as the working directory and a
 configured AWS profile in `us-east-2`.
 
-> **Before the next apply.**
+> **Nothing is deployed yet — the next apply builds the whole stack.**
+> Verified against the HCP API and AWS on 2026-08-03.
 >
-> **Workspace — done.** `MQS_AWS_INFRA` has been **renamed** to
-> `MQS_AWS_INFRA_LIVE`, which is what
-> `terraform/environments/Livetrading/terraform.tf` now binds to. A rename keeps
-> the state in place, so no migration was needed and the next plan sees the live
-> resources it already manages.
+> `MQS_AWS_INFRA_LIVE` (org `MQS`) exists and is bound correctly, but it holds
+> **no state**: zero resources, zero state versions, and no run has ever
+> executed. `MQS_AWS_INFRA_BTV` is likewise empty. In `us-east-2` the account has
+> no VPC beyond the default, no RDS instance, no `mqsmaster-prod-cluster`, no
+> `/mqsmaster-prod/*` SSM parameters and no IAM OIDC provider.
 >
-> **1. Working directory.** After the `prod` → `Livetrading` rename, the
-> workspace's **Terraform Working Directory** setting must read
-> `terraform/environments/Livetrading`. Terraform cannot change a workspace
-> setting — if the workspace is VCS-driven, a stale path makes the next run fail
-> to find configuration, or plan against an empty directory and propose
-> destroying every managed resource.
+> An earlier local state exists in this stack's directory as `terraform.tfstate`
+> (gitignored, `serial=56`) and tracks **zero** resources — the stack was managed
+> locally, then emptied. It was never migrated to HCP, and there is nothing in it
+> to migrate. `terraform init` may offer to copy it up; accepting is harmless.
 >
-> **2. GitHub OIDC provider.** `module.github_oidc` is newly wired into this
-> stack and creates `aws_iam_openid_connect_provider.github`, which is
-> **account-global**. If `token.actions.githubusercontent.com` already exists in
-> the account, the apply fails partway with `EntityAlreadyExists` — after other
-> changes have landed. Check first, and import instead of creating:
+> So `terraform apply` is a **full create**, not an incremental change. Budget for
+> it: a VPC with one NAT gateway (~$32/mo at `single_nat_gateway = true`), an RDS
+> `db.t4g.medium`, the ECS cluster, both services, the SSM parameter groups and
+> the scheduler. Read the plan before confirming.
+>
+> **What this means for the warnings below.** Because there is no state, the usual
+> hazards are inert: a plan cannot propose destroying resources it does not track,
+> and `module.github_oidc` will **create** `aws_iam_openid_connect_provider.github`
+> rather than collide with an existing one. `terraform import` is not needed. It
+> becomes necessary only if the account-global provider
+> (`token.actions.githubusercontent.com`) is created out of band first — then the
+> apply fails partway with `EntityAlreadyExists`. Confirm before applying:
 >
 > ```bash
-> aws iam list-open-id-connect-providers   # look for token.actions.githubusercontent.com
+> aws iam list-open-id-connect-providers   # expect an empty list
+> ```
+>
+> If that list is ever non-empty, adopt the existing provider instead of letting
+> Terraform create a second one:
+>
+> ```bash
 > terraform import module.github_oidc.aws_iam_openid_connect_provider.github \
 >   arn:aws:iam::<account-id>:oidc-provider/token.actions.githubusercontent.com
 > ```
 >
-> The `Backtest_Visualizer` stack has its own workspace, `MQS_AWS_INFRA_BTV`,
-> which must exist before its first `terraform init`, and its own working
-> directory `terraform/environments/Backtest_Visualizer`. Two stacks must never
-> share one workspace — one workspace holds one state, so each stack's plan
-> would propose destroying the other's resources.
+> **Working directory.** Already correct on both workspaces
+> (`/terraform/environments/Livetrading` and
+> `/terraform/environments/Backtest_Visualizer`). Terraform cannot change a
+> workspace setting, so if either is ever renamed again, fix the setting by hand
+> before the next run. Both workspaces run in **local** execution mode: runs
+> happen on your machine with your AWS credentials and HCP only stores state, so
+> a stale working-directory path surfaces as a local error rather than a remote
+> run planning against an empty directory.
+>
+> Two stacks must never share one workspace — one workspace holds one state, so
+> each stack's plan would propose destroying the other's resources.
 
 ## Deploy
 
