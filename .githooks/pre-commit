@@ -1,0 +1,116 @@
+#!/bin/sh
+# =============================================================================
+# Pre-commit credential guard for a PUBLIC repository.
+#
+# Two independent checks, both against the STAGED content only:
+#   1. filename  - blocks credential-shaped paths even when force-added
+#                  (`git add -f` defeats .gitignore; it does not defeat this)
+#   2. content   - blocks credential-shaped values inside otherwise-fine files
+#                  (a real password pasted into a *.example, a key in a doc)
+#
+# Enable once per clone -- hooks are not transported by `git clone`:
+#
+#   git config core.hooksPath .githooks
+#
+# Emergency bypass, deliberately awkward and logged in your shell history:
+#
+#   ALLOW_SECRET_COMMIT=1 git commit ...
+#
+# This hook is a backstop, not the control. The CI scan in
+# .github/workflows/secret-scan.yml runs on the server where it cannot be
+# skipped; this only saves you the round trip.
+# =============================================================================
+
+set -eu
+
+if [ "${ALLOW_SECRET_COMMIT:-}" = "1" ]; then
+	echo "pre-commit: credential guard BYPASSED via ALLOW_SECRET_COMMIT=1" >&2
+	exit 0
+fi
+
+fail=0
+
+note() {
+	printf '\n  BLOCKED  %s\n' "$1" >&2
+	fail=1
+}
+
+# --- 1. filename check -------------------------------------------------------
+#
+# Anchored on the basename so a nested path cannot slip through. The
+# *.example / *.tfvars.example templates are the only credential-shaped names
+# that are allowed to be tracked.
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+
+for path in $staged; do
+	case "$path" in
+	*.example | *.example.*) continue ;;
+	esac
+
+	case "$path" in
+	*.tfvars | *.tfvars.json | *.tfstate | *.tfstate.* | *.tfplan | *.tfplan.* | tfplan | tfplan.*)
+		note "$path -- Terraform variables/state/plan hold credentials in cleartext"
+		;;
+	.env | .env.* | *.env)
+		note "$path -- environment file"
+		;;
+	*.pem | *.key | *.p12 | *.pfx | *.jks | *.keystore | *.ppk | id_rsa | id_rsa.* | id_ed25519 | id_ed25519.*)
+		note "$path -- private key material"
+		;;
+	*accessKey*.csv | *accessKeys*.csv | credentials | credentials.csv | *_credentials.csv)
+		note "$path -- AWS access key export"
+		;;
+	.terraformrc | terraform.rc | .hcp_token)
+		note "$path -- may contain an HCP/Terraform Cloud API token"
+		;;
+	esac
+done
+
+# --- 2. content check --------------------------------------------------------
+#
+# Runs over the staged diff, added lines only. Patterns are chosen to have
+# effectively no false positives against Terraform/Markdown; placeholder values
+# are filtered out afterwards so the tracked *.example files still commit.
+added=$(git diff --cached --diff-filter=ACMR -U0 | grep -E '^\+' | grep -Ev '^\+\+\+' || true)
+
+if [ -n "$added" ]; then
+	hits=$(printf '%s\n' "$added" | grep -nE \
+		-e '(AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16}' \
+		-e 'aws_secret_access_key[[:space:]]*[=:]' \
+		-e '-----BEGIN [A-Z ]*PRIVATE KEY-----' \
+		-e 'gh[pousr]_[A-Za-z0-9]{16,}' \
+		-e 'xox[baprs]-[A-Za-z0-9-]{10,}' \
+		-e 'sk-[A-Za-z0-9_-]{20,}' \
+		-e 'eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.' \
+		-e '(password|passwd|secret|token|api_?key)[[:space:]]*[=:][[:space:]]*["'"'"'][^"'"'"']{8,}["'"'"']' \
+		|| true)
+
+	# Drop placeholder lines. Keep this list tight -- every entry here is a way
+	# for a real credential to be waved through if it happens to contain the
+	# word.
+	hits=$(printf '%s\n' "$hits" | grep -Ev \
+		-e 'REPLACE_ME|CHANGE_ME|<[a-z-]+>|xxxxx|XXXXX|example\.com|your-|dummy|placeholder' \
+		|| true)
+
+	if [ -n "$hits" ]; then
+		note "credential-shaped value in staged content:"
+		printf '%s\n' "$hits" | head -20 | sed 's/^/           /' >&2
+	fi
+fi
+
+if [ "$fail" -ne 0 ]; then
+	cat >&2 <<'EOF'
+
+  This repository is PUBLIC. A pushed credential is compromised the moment it
+  lands, and deleting the commit does not un-publish it -- rotate instead.
+
+  Unstage the file:            git restore --staged <path>
+  Confirm it is ignored:       git check-ignore -v <path>
+  If the finding is a false positive, rephrase the line or bypass with
+  ALLOW_SECRET_COMMIT=1 and say so in the commit message.
+
+EOF
+	exit 1
+fi
+
+exit 0

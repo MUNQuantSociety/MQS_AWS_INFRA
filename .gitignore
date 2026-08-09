@@ -1,25 +1,133 @@
-# Terraform
+# =============================================================================
+# This repository is PUBLIC. Anything committed here is world-readable forever,
+# including after a force-push — GitHub keeps unreachable objects and forks.
+# Treat every rule below as load-bearing.
+#
+# Rules are deny-by-default for credential-shaped files: broad ignore first,
+# then an explicit `!` allowlist for the placeholder templates we DO track.
+# Adding a new tracked example file means adding a matching `!` line.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Terraform — variables, state, plans
+#
+# tfvars hold live credentials in cleartext (db password, FMP/ALPHA/APIFY keys,
+# Supabase anon key). State can hold them too for any resource that is not
+# write-only. Saved plans embed every root variable value in cleartext.
+# -----------------------------------------------------------------------------
 **/.terraform/
+**/.terraform.lock.hcl.bak
+.terraform.tfstate.lock.info
+
 **/*.tfstate
 **/*.tfstate.*
+**/terraform.tfstate.d/
+
 **/*.tfvars
-!**/terraform.tfvars.example
-# Saved plan files embed root variable values (incl. secrets) in cleartext.
+**/*.tfvars.json
+!**/*.tfvars.example
+
 *.tfplan
+*.tfplan.*
+tfplan
+tfplan.*
 *.plan
+plan
+plan.json
+*.plan.json
+
 crash.log
 crash.*.log
 override.tf
 override.tf.json
 *_override.tf
 *_override.tf.json
+
+# CLI config can carry an HCP/Terraform Cloud token.
 .terraformrc
 terraform.rc
-plan
-# Env
+.terraform.d/
+
+# -----------------------------------------------------------------------------
+# Environment files
+#
+# `.env` alone does not match `.env.local` or `.env.prod`; `.env*` does.
+# -----------------------------------------------------------------------------
 .env
+.env*
 *.env
 !.env.example
+!.env.*.example
 
-# OS
+# -----------------------------------------------------------------------------
+# Cloud provider credentials
+#
+# `*accessKeys*.csv` is the exact filename the IAM console hands out
+# (Admin_accessKeys.csv). It must never land in a working tree.
+# -----------------------------------------------------------------------------
+.aws/
+aws_credentials
+credentials
+credentials.csv
+*accessKeys*.csv
+*accessKey*.csv
+*_credentials.csv
+.hcp/
+.hcp_token
+
+# -----------------------------------------------------------------------------
+# Keys and certificates
+# -----------------------------------------------------------------------------
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.ppk
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+*.gpg
+*.asc
+!**/*.pub
+
+# -----------------------------------------------------------------------------
+# Kubeconfig / docker auth, in case either is ever used from here
+# -----------------------------------------------------------------------------
+kubeconfig
+.kube/
+.docker/config.json
+
+# -----------------------------------------------------------------------------
+# Scratch space — where a copied-out secret is most likely to be forgotten
+# -----------------------------------------------------------------------------
+scratch/
+tmp/
+*.tmp
+*.bak
+*.orig
+*.swp
+*.rej
+secrets/
+*secret*.json
+*secret*.yaml
+*secret*.yml
+
+# ...but never the CI definitions, which are named for what they scan for.
+# Without this, .github/workflows/secret-scan.yml is silently untracked and the
+# server-side guard never runs.
+!.github/**
+
+# -----------------------------------------------------------------------------
+# Editors / OS
+#
+# desktop.ini matters here: this tree lives under OneDrive, which writes them.
+# -----------------------------------------------------------------------------
 .DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.code-workspace
