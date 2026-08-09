@@ -38,8 +38,8 @@ MQS_AWS_INFRA/
     │       ├── variables.tf                # All input variables
     │       ├── outputs.tf                  # Top-level outputs
     │       ├── providers.tf                # AWS provider + default tags
-    │       ├── terraform.tf                # HCP `cloud` block + version pins (one workspace = one state)
-    │       ├── backend.tf                  # S3 backend stub (alternative to HCP)
+    │       ├── terraform.tf                # Terraform + provider version pins
+    │       ├── backend.tf                  # S3 state backend (one key = one state)
     │       └── terraform.tfvars.example    # Copy → terraform.tfvars
     │   (Backtest_Visualizer holds the same file set.)
     └── modules/                            # Split by owning stack — see below
@@ -123,7 +123,6 @@ Full deploy steps in [docs/operations.md](docs/operations.md#deploy).
 
 ## Future work
 
-- Move state to the S3 backend + DynamoDB lock (stub in `backend.tf`).
 - Add a stop-task schedule as a safety net if `is_market_open` stays true past close.
 - CloudWatch Alarm + SNS on `ECSTaskStateChange` failures.
 - Second NAT gateway for HA egress (`single_nat_gateway = false`, ~+$32/mo) if

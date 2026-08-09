@@ -38,10 +38,10 @@ An empty result means the ignore rule is NOT matching — stop and fix
 
 ### Where AWS credentials come from
 
-Both HCP workspaces run in **local execution mode**: HCP stores the state, but
-the plan and apply run on your machine with your AWS credentials. So Terraform
-needs credentials in the environment regardless of the HCP login, and
-`terraform login` covers only HCP — it is not an AWS credential.
+Terraform runs entirely on your machine against your AWS credentials, and the
+S3 backend authenticates with those same credentials — so if `aws` works,
+Terraform works, and if it does not, `init` fails on the backend before it
+reaches a single resource.
 
 There are two mechanisms and they are easy to confuse:
 
@@ -142,45 +142,72 @@ already scraped by the time you notice.
    reachable by SHA.
 4. Check CloudTrail for use of the exposed credential between push and rotation.
 
+## State backend
+
+State lives in **S3**, not HCP Terraform. There is no `cloud` block and
+`terraform login` is not part of this workflow.
+
+| | |
+|---|---|
+| Bucket | `mqs-terraform-state` (`us-east-2`) |
+| Livetrading key | `mqsmaster/Livetrading/terraform.tfstate` |
+| Backtest_Visualizer key | `mqs-backtest-visualizer/Backtest_Visualizer/terraform.tfstate` |
+| Locking | S3-native `use_lockfile = true` — no DynamoDB table |
+
+The distinct keys are what keep the two stacks' states independent, the job the
+separate HCP workspaces used to do. One key holds one state, so pointing both
+stacks at the same key would make each plan propose destroying the other's
+resources.
+
+Locking is a conditional write of a `<key>.tflock` object next to the state, so
+two concurrent applies cannot both win. `dynamodb_table` is deprecated as of AWS
+provider 6.x and is not used. A lock left behind by a killed run is released
+with `terraform force-unlock <lock-id>` — check that no apply is genuinely still
+running first.
+
+### Recreating the bucket
+
+A backend cannot provision the bucket that holds its own state, so the bucket is
+a one-time manual step. It already exists; this is here for a rebuild or a new
+account.
+
+```bash
+aws s3api create-bucket --bucket mqs-terraform-state --region us-east-2 --create-bucket-configuration LocationConstraint=us-east-2
+```
+
+```bash
+aws s3api put-public-access-block --bucket mqs-terraform-state --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+```
+
+```bash
+aws s3api put-bucket-versioning --bucket mqs-terraform-state --versioning-configuration Status=Enabled
+```
+
+**Versioning is not optional.** State is the only record of what Terraform
+created; a corrupted or truncated write with versioning off is unrecoverable and
+every managed resource becomes an orphan. With it on, roll back to the previous
+object version.
+
+The live bucket also has SSE-S3 default encryption, a bucket policy denying
+non-TLS requests, and a lifecycle rule expiring noncurrent versions after 90
+days.
+
 > **Nothing is deployed yet — the next apply builds the whole stack.**
-> Verified against the HCP API and AWS on 2026-08-03.
+> Verified against AWS on 2026-08-09.
 >
-> `MQS_AWS_INFRA_LIVE` (org `MQS`) exists and is bound correctly, but it holds
-> **no state**: zero resources, zero state versions, and no run has ever
-> executed. `MQS_AWS_INFRA_BTV` is likewise empty. In `us-east-2` the account has
-> no VPC beyond the default, no RDS instance, no `mqsmaster-prod-cluster`, no
-> `/mqsmaster-prod/*` SSM parameters and no IAM OIDC provider.
+> The state bucket holds no state object for either key: no apply has run. In
+> `us-east-2` the account has no VPC beyond the default, no RDS instance, no
+> `mqsmaster-prod-cluster`, no `/mqsmaster-prod/*` SSM parameters and no IAM
+> OIDC provider.
 >
-> An earlier local state exists in this stack's directory as `terraform.tfstate`
-> (gitignored, `serial=56`) and tracks **zero** resources — the stack was managed
-> locally, then emptied. It was never migrated to HCP, and there is nothing in it
-> to migrate. `terraform init` may offer to copy it up. Accepting is safe **only
-> when the source is a state you have approved and the destination is empty** —
-> re-check both before agreeing, because these facts age.
->
-> Inspect the two sides separately. Do not use `terraform state list` for this:
-> it reports whichever state is currently configured — the local file before
-> `init`, the remote workspace after — so it silently answers a different question
-> depending on when you run it.
+> Confirm before applying — an empty listing means no state exists yet:
 >
 > ```bash
-> # Source: read the local file directly, independent of any backend config.
-> jq -r '"serial=\(.serial) resources=\((.resources // []) | length)"' terraform.tfstate
->
-> # Destination: confirm the workspace you are bound to, then its resource count.
-> grep -A6 'cloud {' terraform.tf        # organization + workspace name
+> aws s3 ls s3://mqs-terraform-state --recursive
 > ```
 >
-> Read the destination count from the workspace's page in HCP, or via the API —
-> `GET /api/v2/organizations/<org>/workspaces/<name>`, field
-> `attributes.resource-count`.
->
-> Proceed only when the destination is empty. If **either** side tracks
-> resources, **stop**: copying a populated local state into a workspace that
-> already holds one silently picks a winner, and the losing resources keep
-> running while nothing manages them. Reconcile deliberately with
-> `terraform state pull` / `push` or targeted imports instead of accepting the
-> prompt.
+> Treat a **failed** call as unknown, not as empty. An `AccessDenied` prints
+> nothing to stdout, which reads identically to "no state".
 >
 > So `terraform apply` is a **full create**, not an incremental change. Budget for
 > it: a VPC with one NAT gateway (~$32/mo at `single_nat_gateway = true`), an RDS
@@ -233,16 +260,12 @@ already scraped by the time you notice.
 >   arn:aws:iam::<account-id>:oidc-provider/token.actions.githubusercontent.com
 > ```
 >
-> **Working directory.** Already correct on both workspaces
-> (`/terraform/environments/Livetrading` and
-> `/terraform/environments/Backtest_Visualizer`). Terraform cannot change a
-> workspace setting, so if either is ever renamed again, fix the setting by hand
-> before the next run. Both workspaces run in **local** execution mode: runs
-> happen on your machine with your AWS credentials and HCP only stores state, so
-> a stale working-directory path surfaces as a local error rather than a remote
-> run planning against an empty directory.
+> **Working directory.** Every run happens wherever you invoke it, against your
+> local AWS credentials — there is no remote runner and no configured working
+> directory to drift. `cd` into the right environment directory before
+> `init`/`plan`/`apply`; that is the whole mechanism.
 >
-> Two stacks must never share one workspace — one workspace holds one state, so
+> The two stacks must never share one state key — one key holds one state, so
 > each stack's plan would propose destroying the other's resources.
 
 ## Deploy
@@ -437,19 +460,19 @@ chmod 600 terraform/environments/staging/terraform.tfvars
 # credentials issued for staging — do not reuse the live ones
 ```
 
-**Then change the workspace name — this step is not optional.** The copy brings
-`terraform.tf` with it, and that file hardcodes
-`cloud { workspaces { name = "MQS_AWS_INFRA_LIVE" } }`. Left as-is, the new
-directory binds to **production state**, and its first plan reads staging's
+**Then change the state key — this step is not optional.** The copy brings
+`backend.tf` with it, and that file hardcodes
+`key = "mqsmaster/Livetrading/terraform.tfstate"`. Left as-is, the new directory
+reads and writes **production state**, and its first plan reads staging's
 smaller sizing out of `terraform.tfvars` and proposes modifying the live RDS
-instance and ECS services. Create a new workspace and point the copy at it:
+instance and ECS task. Give the copy its own key:
 
-```bash
-# in staging/terraform.tf
-#   workspaces { name = "MQS_AWS_INFRA_STAGING" }
+```hcl
+# in staging/backend.tf
+key = "mqsmaster/staging/terraform.tfstate"
 ```
 
 Only after that does each environment keep its own state and `terraform.tfvars`
-— one workspace holds one state, so the binding is what separates them, not the
-directory. Module sources (`../../modules/Livetrading/...`) resolve identically
-from any environment directory.
+— one key holds one state, so the key is what separates them, not the directory.
+Module sources (`../../modules/Livetrading/...`) resolve identically from any
+environment directory.
