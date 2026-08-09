@@ -36,6 +36,52 @@ git check-ignore -v terraform/environments/Livetrading/terraform.tfvars
 An empty result means the ignore rule is NOT matching — stop and fix
 `.gitignore` before writing any real value to disk.
 
+### Where AWS credentials come from
+
+Both HCP workspaces run in **local execution mode**: HCP stores the state, but
+the plan and apply run on your machine with your AWS credentials. So Terraform
+needs credentials in the environment regardless of the HCP login, and
+`terraform login` covers only HCP — it is not an AWS credential.
+
+There are two mechanisms and they are easy to confuse:
+
+| | `aws configure` | `.env` |
+|---|---|---|
+| Writes to | `~/.aws/credentials`, outside the repo | `.env` in the repo root, gitignored |
+| Read automatically | Yes, by both aws CLI and Terraform | **No — by nothing** |
+| Selected with | `AWS_PROFILE`, or the `default` profile | Loading it into the shell first |
+
+**Nothing reads `.env` on its own.** Terraform and the aws CLI read the process
+environment; neither knows what a `.env` file is. The file is inert until it is
+loaded:
+
+```bash
+.\scripts\load-env.ps1
+```
+
+```bash
+set -a && . ./.env && set +a
+```
+
+Once per terminal, before `terraform` or `aws`. A new terminal is a new process,
+so it has to be run again there — if `aws sts get-caller-identity` suddenly
+starts reporting no credentials, that is the reason.
+
+`scripts/load-env.ps1` skips comments and blank values, strips surrounding
+quotes while leaving JSON values like `TF_VAR_db_secret_values={...}` intact,
+and warns on a line it cannot parse rather than dropping it silently. It also
+warns if `.env` is readable beyond your own account, which matters here because
+the tree sits under OneDrive and a loose ACL syncs with the file.
+
+Restrict it after filling it in:
+
+```bash
+icacls .env /inheritance:r /grant:r "$env:USERNAME:R"
+```
+
+`AWS_REGION` in `.env` is for the aws CLI only. Terraform takes its region from
+`var.aws_region` in `providers.tf`, so the two are set independently.
+
 ### Prefer environment variables over `terraform.tfvars`
 
 Terraform reads a sensitive variable from `TF_VAR_<name>` exactly as it would
