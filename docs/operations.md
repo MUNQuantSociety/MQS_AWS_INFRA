@@ -3,6 +3,99 @@
 All commands assume `terraform/environments/Livetrading` as the working directory and a
 configured AWS profile in `us-east-2`.
 
+## Credential handling — read before your first command
+
+**This repository is public** (`MUNQuantSociety/MQS_AWS_INFRA`). A credential
+pushed here is compromised the second it lands: GitHub keeps unreachable objects
+after a force-push, forks keep their own copy, and the public events firehose is
+scraped continuously. Deleting the commit does not undo it. The only remedy is
+rotation.
+
+### One-time setup per clone
+
+Git does not transport hooks, so this is not automatic:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+That activates [`.githooks/pre-commit`](../.githooks/pre-commit), which refuses
+to commit credential-shaped paths (`*.tfvars`, `*.tfstate`, `.env*`, `*.pem`,
+`*accessKeys*.csv`) and credential-shaped values in staged content. It is a
+convenience layer only — `--no-verify` skips it. The authority is
+[`.github/workflows/secret-scan.yml`](../.github/workflows/secret-scan.yml),
+which runs gitleaks over the **full history** on every push and cannot be
+skipped from a developer machine.
+
+Verify the guard is live before trusting it:
+
+```bash
+git check-ignore -v terraform/environments/Livetrading/terraform.tfvars
+```
+
+An empty result means the ignore rule is NOT matching — stop and fix
+`.gitignore` before writing any real value to disk.
+
+### Prefer environment variables over `terraform.tfvars`
+
+Terraform reads a sensitive variable from `TF_VAR_<name>` exactly as it would
+from a tfvars file. Using the env-var route means **no plaintext credential file
+exists on disk at all**, which removes the whole class of accidents: a
+force-add, a `cp -r` into a new environment directory, an editor backup file, or
+OneDrive syncing the tree to another machine. This tree does live under
+OneDrive, so that last one is not hypothetical.
+
+```bash
+cp .env.example .env      # gitignored by the `.env*` rule
+chmod 600 .env            # git-bash honours this; on plain Windows use file ACLs
+set -a && . ./.env && set +a
+terraform plan
+```
+
+If you do use `terraform.tfvars`, keep it mode 600, never copy it between
+environment directories, and never pass `-var` on the command line — arguments
+land in shell history and in the process list.
+
+### Commands that leak, and what to run instead
+
+| Do not run | Why | Instead |
+|---|---|---|
+| `terraform plan -out=tfplan` | The plan file embeds every root variable value in cleartext, including passwords | Plan without `-out`; if you need one, treat it as a secret and delete it |
+| `terraform show -json` / `terraform state pull` piped into a file | Non-write-only attributes appear in cleartext | Read specific outputs with `terraform output -raw <name>` |
+| `terraform output` with no argument, in CI | Prints every output, sensitive ones included | `terraform output -raw <name>`, one at a time |
+| `aws ssm put-parameter --value '<secret>'` | Lands in shell history and `ps` output | `--value "file:///path"`, then delete the file |
+| `aws ssm get-parameter --with-decryption` in a shared terminal | Prints the credential to a scrollback that may be screenshotted | Only when you actually need the value; clear scrollback after |
+| `terraform apply` with `TF_LOG=DEBUG` | Debug logs contain request bodies with credential values | Leave `TF_LOG` unset, or write to a gitignored path and delete it |
+
+The write-only arguments (`value_wo`, `password_wo`) already keep SSM parameter
+values and the RDS master password out of Terraform state and plan output — see
+[modules/Livetrading/ssm-parameters](../terraform/modules/Livetrading/ssm-parameters/main.tf).
+That protection covers those specific attributes, not the tfvars file you typed
+them into.
+
+### Placeholders now fail the plan
+
+`db_secret_values`, `api_secret_values` and `market_data_secret_values` all carry
+`REPLACE_ME` defaults so the modules parse without credentials. Each now has a
+`validation` block rejecting that value, so a forgotten tfvars fails at plan
+time instead of provisioning RDS with the literal master password
+`REPLACE_ME`. `MARKET_DATA_SSLMODE` is likewise constrained to
+`require`/`verify-ca`/`verify-full`, because that connection crosses the public
+internet and `prefer` silently downgrades to plaintext.
+
+### If a credential does reach GitHub
+
+Order matters — rotate first, clean history second, because the credential is
+already scraped by the time you notice.
+
+1. Rotate the credential at the source (IAM, RDS, the vendor console).
+2. `aws ssm put-parameter --overwrite` the new value, then
+   `aws ecs update-service --force-new-deployment` so running tasks pick it up.
+3. Only then rewrite history (`git filter-repo`), and open a GitHub support
+   request to expire the cached objects — a force-push alone leaves them
+   reachable by SHA.
+4. Check CloudTrail for use of the exposed credential between push and rotation.
+
 > **Nothing is deployed yet — the next apply builds the whole stack.**
 > Verified against the HCP API and AWS on 2026-08-03.
 >
@@ -45,7 +138,7 @@ configured AWS profile in `us-east-2`.
 >
 > So `terraform apply` is a **full create**, not an incremental change. Budget for
 > it: a VPC with one NAT gateway (~$32/mo at `single_nat_gateway = true`), an RDS
-> `db.t4g.medium`, the ECS cluster, both services, the SSM parameter groups and
+> `db.t4g.small` with 100 GB gp3, the ECS cluster, both services, the SSM parameter groups and
 > the scheduler. Read the plan before confirming.
 >
 > **What this means for the warnings below.** Because there is no state, the usual
@@ -126,8 +219,6 @@ Outputs after apply:
 ecr_repository_url            = "<acct>.dkr.ecr.us-east-2.amazonaws.com/livetradingbot"
 ecs_cluster_name              = "mqsmaster-prod-cluster"
 market_task_definition_family = "mqsmaster-prod"
-nlp_task_definition_family    = "mqsmaster-prod-nlp"
-nlp_service_name              = "mqsmaster-prod-nlp"
 log_group_name                = "/ecs/mqsmaster-prod"
 rds_endpoint                  = "<id>.<region>.rds.amazonaws.com:5432"
 ```
@@ -154,9 +245,11 @@ Then set `image_tag` in `terraform.tfvars` to the tag you just pushed
 (`1.0.5-5` above) and re-apply. It is currently pinned to `1.0.5-4`; pushing a
 new tag without bumping this deploys the old image.
 
-Note this only governs the *first* revision of each task definition — both the
-market and NLP families carry `ignore_changes = [container_definitions]`, so
-after that CI re-registration is what moves the image.
+Note this only governs the *first* revision of the task definition — the market
+family carries `ignore_changes = [container_definitions]`, so after that CI
+re-registration is what moves the image. There is no ECS Service to update: the
+schedule targets the task definition family, so the next scheduled run picks up
+the newest ACTIVE revision on its own.
 
 ## Manually trigger the market task
 
@@ -175,10 +268,12 @@ gateway.
 aws logs tail /ecs/mqsmaster-prod --since 1h --follow
 ```
 
-Filter to one workload by stream prefix:
+Only the market task writes here, under the `mqsmaster/*` stream prefix. Between
+sessions the group is silent — that is expected, not a failure. To confirm a
+session actually ran, list the streams rather than tailing:
 
 ```bash
-aws logs tail /ecs/mqsmaster-prod --log-stream-name-prefix nlp --since 1h --follow
+aws logs describe-log-streams --log-group-name /ecs/mqsmaster-prod --order-by LastEventTime --descending --max-items 5
 ```
 
 ## Rotating secrets
@@ -245,11 +340,17 @@ rotating a single credential.
 This is also the mechanism for fixing `/mqsmaster-prod/db/host` if RDS is ever
 replaced and gets a new endpoint — bump `db_parameter_version` and apply.
 
-Running tasks keep the old value — secrets are read at task start. Force a
-refresh of the always-on NLP service:
+Secrets are read at task start, so a rotation reaches the container at the next
+scheduled run. There is no ECS Service to `--force-new-deployment` — the stack
+runs only the scheduled market task.
+
+A session already in flight keeps the old value for its whole run. If the
+rotation has to land immediately, stop the running task and re-trigger it by
+hand (see [Manually trigger the market task](#manually-trigger-the-market-task)),
+accepting that the session restarts from scratch:
 
 ```bash
-aws ecs update-service --cluster mqsmaster-prod-cluster --service mqsmaster-prod-nlp --force-new-deployment
+aws ecs stop-task --cluster mqsmaster-prod-cluster --task <task-arn> --reason "credential rotation"
 ```
 
 ## Changing the schedule

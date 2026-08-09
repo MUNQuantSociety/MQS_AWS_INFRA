@@ -53,7 +53,7 @@ variable "engine_version" {
 }
 
 variable "instance_class" {
-  description = "RDS instance class. db.t4g.medium = 2 vCPU / 4 GB (Graviton)."
+  description = "RDS instance class. db.t4g.small = 2 vCPU / 2 GB (Graviton)."
   type        = string
   default     = "db.t4g.medium"
 }

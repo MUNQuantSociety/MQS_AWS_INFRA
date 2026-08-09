@@ -16,8 +16,8 @@ module "ecr_repository" {
 # public IP on the task ENI -- it does NOT mean isolated. Both workloads still
 # reach their third-party API hosts exactly as before:
 #
-#   - ecs_service_nlp (always-on) and ecs_task_market (scheduled) call out to
-#     FMP, Alpha Vantage and Apify over HTTPS.
+#   - ecs_task_market (scheduled) calls out to FMP, Alpha Vantage and Apify
+#     over HTTPS.
 #   - Path: private subnet -> 0.0.0.0/0 route -> NAT gateway -> IGW -> internet.
 #   - The task SG (modules/Livetrading/networking) allows all egress, so no per-host
 #     allowlisting is required; adding a new data provider needs no VPC change.
@@ -139,30 +139,16 @@ module "ecs_task_market" {
   aws_region              = var.aws_region
 }
 
-module "ecs_service_nlp" {
-  source = "../../modules/Livetrading/ecs-service-nlp"
-
-  name_prefix             = local.name_prefix
-  image_uri               = local.image_uri
-  task_cpu                = var.nlp_task_cpu
-  task_memory             = var.nlp_task_memory
-  desired_count           = var.nlp_desired_count
-  task_execution_role_arn = module.iam_roles.task_execution_role_arn
-  task_role_arn           = module.iam_roles.task_role_arn
-  cluster_id              = module.ecs_cluster.cluster_id
-  subnet_ids              = module.vpc.private_subnets
-  security_group_id       = module.networking.task_security_group_id
-  assign_public_ip        = false
-  container_secrets       = local.container_secrets
-  log_group_name          = module.cloudwatch_logs.log_group_name
-  aws_region              = var.aws_region
-}
-
 ###############################################################################
 # CI/CD identity. The deploy workflow (.github/workflows/deploy.yml, which must
 # live in the MQSMaster repo alongside its Dockerfile) assumes this role via
 # OIDC -- no static AWS access keys anywhere. Feed the deploy_role_arn output
 # into that repo's AWS_DEPLOY_ROLE_ARN secret.
+#
+# The stack runs no ECS Service, so the deploy role grants no ecs:UpdateService.
+# CI's job ends at RegisterTaskDefinition: the scheduler targets the task
+# definition FAMILY rather than a pinned revision, so the next scheduled run
+# picks the new revision up on its own.
 ###############################################################################
 
 module "github_oidc" {
@@ -173,7 +159,6 @@ module "github_oidc" {
   allowed_refs      = var.github_allowed_refs
 
   ecr_repository_arn      = module.ecr_repository.repository_arn
-  nlp_service_arn         = module.ecs_service_nlp.service_arn
   task_execution_role_arn = module.iam_roles.task_execution_role_arn
   task_role_arn           = module.iam_roles.task_role_arn
 }

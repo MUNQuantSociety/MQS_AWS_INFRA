@@ -8,7 +8,7 @@
 ###############################################################################
 
 # Egress-only: no ingress rules at all, so nothing can reach the tasks, but the
-# tasks can reach anything. This is what keeps the NLP service and the scheduled
+# tasks can reach anything. This is what keeps the scheduled
 # market task able to call FMP / Alpha Vantage / Apify from private subnets --
 # their traffic leaves via the NAT gateway. Adding a new data provider requires
 # no change here.

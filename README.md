@@ -3,7 +3,8 @@
 Terraform that provisions ECS Fargate and a managed Postgres to run the
 [`MQSMaster`](../MQSMaster) quantitative trading project.
 
-- **NLP service** (always-on): runs `python NLP/main_NLP.py` 24/7. ECS restarts it on crash.
+One workload, on a schedule. Nothing runs between sessions.
+
 - **Market task** (scheduled, Mon–Fri): EventBridge fires at the 09:30 ET market open
   (11:00 `America/St_Johns`). The container runs `start.sh` and exits when the market
   closes. The trigger must not be moved earlier — `start.sh` shuts the session down if
@@ -31,7 +32,7 @@ MQS_AWS_INFRA/
 └── terraform/
     ├── environments/
     │   ├── Backtest_Visualizer/            # Visualizer API: Fargate + ALB, no NAT, external DB
-    │   └── Livetrading/                    # Trading bot + NLP + RDS, private subnets behind one NAT
+    │   └── Livetrading/                    # Trading bot + RDS, private subnets behind one NAT
     │       ├── main.tf                     # Module composition
     │       ├── locals.tf                   # name_prefix, log group, secret wiring
     │       ├── variables.tf                # All input variables
@@ -51,7 +52,6 @@ MQS_AWS_INFRA/
         │   ├── rds-postgres/               # RDS instance, subnet group, DB SG
         │   ├── ecs-cluster/                # Cluster + Fargate capacity providers
         │   ├── ecs-task-market/            # Market-hours task definition
-        │   ├── ecs-service-nlp/            # Always-on task definition + ECS Service
         │   ├── github-oidc/                # GitHub Actions OIDC provider + deploy role
         │   └── eventbridge-scheduler/      # Scheduler/Rule + RunTask IAM role
         └── Backtest_Visualizer/
@@ -65,8 +65,8 @@ MQS_AWS_INFRA/
             └── ecs-service-api/            # API task definition + ECS Service
 ```
 
-**Two independent stacks.** `Livetrading` runs the trading bot, the NLP service
-and RDS in private subnets behind a single NAT gateway. `Backtest_Visualizer`
+**Two independent stacks.** `Livetrading` runs the trading bot and RDS in
+private subnets behind a single NAT gateway. `Backtest_Visualizer`
 runs the visualizer API on Fargate behind an ALB with **no NAT gateway** and no
 database of its own. They share no state, no VPC and no modules — being in one
 repository does not put them on one network.
@@ -80,7 +80,7 @@ impossible. The cost is that `cloudwatch-logs`, `ecs-cluster`, `iam-roles` and
 `ecr-repository` exist in both trees and drift independently.
 
 **Conventions.** Module directories are kebab-case and named for the AWS service
-they own (`ecs-service-nlp`, not `nlp_service`); the two top-level directories
+they own (`ecs-task-market`, not `market_task`); the two top-level directories
 under `modules/` are named for the stack that consumes them. Terraform
 identifiers — module labels, variables, outputs — stay snake_case per the
 HashiCorp style guide. Every module has the same three files: `main.tf`,
@@ -112,7 +112,7 @@ Full deploy steps in [docs/operations.md](docs/operations.md#deploy).
 
 | Service | Purpose |
 |---|---|
-| **ECS (Fargate)** | Runs both workloads — one long-lived Service, one scheduled task |
+| **ECS (Fargate)** | Runs the scheduled market task. No long-lived Service — the cluster is idle between sessions |
 | **ECR** | Container image registry, with a lifecycle policy to expire old images |
 | **RDS (PostgreSQL)** | Managed database, private, reachable only from the task SG |
 | **EventBridge Scheduler** | Timezone-aware Mon–Fri cron that calls ECS `RunTask` |
@@ -126,6 +126,5 @@ Full deploy steps in [docs/operations.md](docs/operations.md#deploy).
 - Move state to the S3 backend + DynamoDB lock (stub in `backend.tf`).
 - Add a stop-task schedule as a safety net if `is_market_open` stays true past close.
 - CloudWatch Alarm + SNS on `ECSTaskStateChange` failures.
-- FARGATE_SPOT for the NLP service (~70% cheaper, tolerates restarts).
 - Second NAT gateway for HA egress (`single_nat_gateway = false`, ~+$32/mo) if
   the batch workload ever becomes latency- or availability-critical.

@@ -7,13 +7,14 @@ Estimates for `us-east-2` at the default sizing in `variables.tf`.
 | Component | Sizing | Cost/mo |
 |-----------|--------|---------|
 | Market task (Fargate, scheduled) | 2 vCPU / 8 GB × ~7 h × 21 days ≈ 147 h | ~$11–15 |
-| NLP service (Fargate, always-on) | 0.5 vCPU / 2 GB × 730 h | ~$14–18 |
-| NLP service (alt, smaller) | 0.25 vCPU / 2 GB × 730 h | ~$8–11 |
 | ECR storage | a few image revisions | ~$0.10 |
 | SSM Parameter Store | 9 Standard SecureString params | $0 |
-| CloudWatch Logs | volume-dependent | ~$2–3 |
-| **Subtotal (default sizing)** | | **~$27–36/mo** |
-| **Subtotal (smaller NLP)** | | **~$21–29/mo** |
+| CloudWatch Logs | volume-dependent | ~$1–2 |
+| **Subtotal** | | **~$12–17/mo** |
+
+There is no always-on ECS Service. Fargate bills only for the hours the
+scheduled session actually runs, so the compute line scales with market days,
+not wall-clock time. The removed NLP service was ~$14–18/mo on its own.
 
 Credential storage is free. Standard-tier parameters carry no storage charge
 regardless of type — `SecureString` included — and at standard throughput there
@@ -54,18 +55,23 @@ gateway itself — see the Levers table.
 
 | Component | Sizing | Cost/mo |
 |-----------|--------|---------|
-| RDS instance | `db.t4g.medium`, single-AZ | ~$50–60 |
-| gp3 storage | 100 GB allocated | ~$12 |
+| RDS instance | `db.t4g.small`, single-AZ | ~$25–30 |
+| gp3 storage | 100 GB allocated, 200 GB ceiling | ~$12 |
 | Backups | 7-day retention | ~$5–10 |
-| **Subtotal** | | **~$67–82/mo** |
+| **Subtotal** | | **~$42–52/mo** |
 
 Setting `db_multi_az = true` roughly doubles the instance and storage lines.
 
+Storage bills on **allocated**, not used, so the 200 GB autoscaling ceiling costs
+nothing until RDS actually grows into it — and once it does, that growth is
+permanent. Allocated storage can never be reduced in place; shrinking means a
+dump/restore into a new instance.
+
 ## Total
 
-**~$127–151/mo** at defaults (compute ~$27–36, networking ~$33, database ~$67–82).
-RDS still dominates at roughly half the bill; the NAT gateway is the next single
-largest line.
+**~$87–102/mo** at defaults (compute ~$12–17, networking ~$33, database ~$42–52).
+RDS is the largest line, the NAT gateway is second, and compute is now the
+smallest of the three.
 
 Before the private-subnet migration this was ~$100–120/mo, with tasks running in
 the default VPC on public IPs and no NAT. The ~$33/mo delta buys workloads with
@@ -75,9 +81,9 @@ no inbound path from the internet and a single stable egress IP.
 
 | Lever | Change | Saving |
 |---|---|---|
-| Smaller NLP task | `nlp_task_cpu = "256"` | ~$6/mo — FinBERT still fits, throughput drops |
-| FARGATE_SPOT for NLP | capacity provider swap | ~70% of the NLP line, at the cost of occasional restarts |
-| Smaller RDS | `db.t4g.small` | ~$25/mo, if the working set fits in 2 GB |
+| Smaller market task | `market_task_cpu = "1024"` | ~$5/mo — longer sessions if the scripts are CPU-bound |
+| FARGATE_SPOT for the market task | capacity provider swap | ~70% of the compute line; a mid-session interruption loses the session |
+| Larger RDS | `db.t4g.medium` | **costs** ~$25/mo more — the upgrade path if 2 GB stops holding the working set |
 | Shorter log retention | `log_retention_days = 7` | ~$1/mo |
 | Drop NAT entirely | public subnets + `assign_public_ip = true` | ~$33/mo, at the cost of a public IP on every task |
 | Disable storage autoscaling | `db_max_allocated_storage = db_allocated_storage` | caps unplanned growth |
