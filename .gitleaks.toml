@@ -18,9 +18,15 @@ useDefault = true
 [[rules]]
 id = "mqs-tfvars-real-value"
 description = "Non-placeholder value assigned to a known secret variable"
-# Matches `PASSWORD = "something"` / `FMP_API_KEY = "something"` in HCL where
-# the value is not one of our placeholder tokens.
-regex = '''(?i)(password|FMP_API_KEY|ALPHA_KEY|APIFY_KEY|SUPABASE_ANON_KEY|MARKET_DATA_PASSWORD)\s*=\s*"(?!REPLACE_ME|CHANGE_ME|)[^"]{8,}"'''
+# Matches an 8+ character quoted value assigned to one of this repo's secret
+# variable names in HCL.
+#
+# No negative lookahead here. gitleaks compiles with Go's RE2, which has no
+# lookaround at all -- a `(?!...)` does not merely fail to match, it panics the
+# whole binary at config load and every scan exits 2. Placeholder filtering is
+# the [allowlist] block's job instead; REPLACE_ME and friends are listed there
+# and are matched against the captured secret.
+regex = '''(?i)(password|FMP_API_KEY|ALPHA_KEY|APIFY_KEY|SUPABASE_ANON_KEY|MARKET_DATA_PASSWORD)\s*=\s*"[^"]{8,}"'''
 tags = ["terraform", "credential"]
 
 [[rules]]
