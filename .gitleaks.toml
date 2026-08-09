@@ -26,7 +26,14 @@ description = "Non-placeholder value assigned to a known secret variable"
 # whole binary at config load and every scan exits 2. Placeholder filtering is
 # the [allowlist] block's job instead; REPLACE_ME and friends are listed there
 # and are matched against the captured secret.
-regex = '''(?i)(password|FMP_API_KEY|ALPHA_KEY|APIFY_KEY|SUPABASE_ANON_KEY|MARKET_DATA_PASSWORD)\s*=\s*"[^"]{8,}"'''
+#
+# secretGroup = 2 is what makes that work. Allowlist regexes are tested against
+# the SECRET, not the whole match, and without secretGroup the secret is group 1
+# -- the variable name. The allowlist was then comparing REPLACE_ME against
+# "MARKET_DATA_PASSWORD", never matching, and all 28 placeholder lines in the
+# tracked *.example templates reported as leaks. Group 2 is the quoted value.
+regex = '''(?i)(password|FMP_API_KEY|ALPHA_KEY|APIFY_KEY|SUPABASE_ANON_KEY|MARKET_DATA_PASSWORD)\s*=\s*"([^"]{8,})"'''
+secretGroup = 2
 tags = ["terraform", "credential"]
 
 [[rules]]
