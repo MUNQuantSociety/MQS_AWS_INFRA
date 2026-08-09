@@ -14,7 +14,8 @@ One workload, on a schedule. Nothing runs between sessions.
 
 | Doc | Contents |
 |---|---|
-| [docs/architecture.md](docs/architecture.md) | Diagram, workload split, secret wiring, image caveats |
+| [docs/architecture-diagram.md](docs/architecture-diagram.md) | Mermaid diagrams of the deployed stack, resource inventory, what is deliberately absent |
+| [docs/architecture.md](docs/architecture.md) | Workload split, network topology, secret wiring, image caveats |
 | [docs/operations.md](docs/operations.md) | Deploy, first image push, manual runs, logs, secret rotation |
 | [docs/cost-model.md](docs/cost-model.md) | Monthly estimate and the levers that move it |
 
