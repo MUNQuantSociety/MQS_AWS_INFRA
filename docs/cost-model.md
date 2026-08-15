@@ -29,27 +29,36 @@ applies here.
 
 | Component | Sizing | Cost/mo |
 |-----------|--------|---------|
-| NAT gateway | 1 × $0.045/h × 730 h (`single_nat_gateway = true`) | ~$32 |
-| NAT data processing | $0.045/GB — JSON API responses only | ~$1 |
-| S3 gateway endpoint | free — carries ECR image layer pulls | $0 |
+| NAT gateway | none — `task_in_public_subnet = true` | $0 |
+| Public IPv4 on the task ENI | $0.005/h, only while a task runs (~147 h) | ~$0.75 |
+| S3 gateway endpoint | free | $0 |
 | VPC, subnets, route tables, IGW | no hourly charge | $0 |
-| **Subtotal** | | **~$33/mo** |
+| **Subtotal** | | **~$1/mo** |
 
-The NAT gateway is the whole networking bill. Two choices hold it down:
+**The networking bill is now rounding error, and that is the whole point of
+running the task in the public subnets.** The task egresses straight out the IGW,
+which charges nothing hourly and nothing per GB inbound. The only line left is
+the public IPv4 address, billed hourly but *only while a task is running* — a
+scheduled workload holds one for ~147 h/mo, not 730.
 
-- `single_nat_gateway = true` — one NAT for all AZs instead of one per AZ, which
-  would be ~$97/mo. The trade is a single-AZ failure point for egress.
-- The **free S3 gateway endpoint** keeps ECR image layer pulls off the NAT.
-  Without it, every task start would push a multi-hundred-MB image pull through
-  NAT data processing. Interface endpoints for ECR/SSM/Logs were considered
-  and rejected: at ~$7.20/mo each **per AZ**, four of them across 2 AZs costs
-  more than the NAT they would replace.
+What this costs, and it is not money: **there is no stable egress IP.** Fargate
+cannot hold an Elastic IP, so the task's public address is fresh on every run. A
+NAT gateway's Elastic IP was the only thing providing a stable source address.
+Set `task_in_public_subnet = false` to get it back at ~$32/mo — necessary if a
+data provider IP-allowlists this stack, and pointless otherwise.
+
+In that private mode the old numbers apply: ~$32/mo for one NAT gateway
+(`single_nat_gateway = true`, versus ~$97/mo for one per AZ) plus ~$1/mo of NAT
+data processing on JSON API responses. The **free S3 gateway endpoint** mattered
+most there, keeping multi-hundred-MB ECR image pulls off NAT data processing at
+every task start. Interface endpoints for ECR/SSM/Logs were considered and
+rejected: at ~$7.20/mo each **per AZ**, four across 2 AZs costs more than the NAT
+they would replace.
 
 `az_count` is not a cost lever. It defaults to **2**, the floor imposed by RDS
-subnet groups, and raising it changes nothing on the bill: `single_nat_gateway`
-caps NAT at one gateway whatever the AZ count, and subnets, route tables and the
-IGW carry no hourly charge. The only networking lever that moves money is the NAT
-gateway itself — see the Levers table.
+subnet groups, and raising it changes nothing on the bill: subnets, route tables
+and the IGW carry no hourly charge, and in private mode `single_nat_gateway` caps
+NAT at one gateway whatever the AZ count.
 
 ## Database
 
@@ -69,13 +78,16 @@ dump/restore into a new instance.
 
 ## Total
 
-**~$87–102/mo** at defaults (compute ~$12–17, networking ~$33, database ~$42–52).
-RDS is the largest line, the NAT gateway is second, and compute is now the
-smallest of the three.
+**~$55–70/mo** at defaults (compute ~$12–17, networking ~$1, database ~$42–52).
+RDS is now essentially the entire bill; compute is a distant second and
+networking has stopped registering.
 
-Before the private-subnet migration this was ~$100–120/mo, with tasks running in
-the default VPC on public IPs and no NAT. The ~$33/mo delta buys workloads with
-no inbound path from the internet and a single stable egress IP.
+History: ~$100–120/mo originally (tasks in the default VPC, no dedicated
+networking), then ~$87–102/mo after the private-subnet migration added a NAT
+gateway, now ~$55–70/mo after moving the task to the public subnets and dropping
+that gateway. The task keeps its zero-ingress security group throughout, so the
+inbound posture is the same in all three; what the current layout gives up
+against the middle one is the stable egress IP, not isolation.
 
 ## Levers
 
@@ -85,7 +97,7 @@ no inbound path from the internet and a single stable egress IP.
 | FARGATE_SPOT for the market task | capacity provider swap | ~70% of the compute line; a mid-session interruption loses the session |
 | Larger RDS | `db.t4g.medium` | **costs** ~$25/mo more — the upgrade path if 2 GB stops holding the working set |
 | Shorter log retention | `log_retention_days = 7` | ~$1/mo |
-| Drop NAT entirely | public subnets + `assign_public_ip = true` | ~$33/mo, at the cost of a public IP on every task |
+| Restore a stable egress IP | `task_in_public_subnet = false` | **costs** ~$32/mo — the NAT gateway comes back. Only needed if a provider IP-allowlists you |
 | Disable storage autoscaling | `db_max_allocated_storage = db_allocated_storage` | caps unplanned growth |
 
 ## Comparison

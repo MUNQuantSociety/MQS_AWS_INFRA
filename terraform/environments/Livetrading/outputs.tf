@@ -58,7 +58,17 @@ output "task_security_group_id" {
 }
 
 output "task_subnet_ids" {
-  description = "Private subnets used by all Fargate tasks."
+  description = "Subnets the scheduled Fargate task runs in — public when task_in_public_subnet is true, private otherwise."
+  value       = var.task_in_public_subnet ? module.vpc.public_subnets : module.vpc.private_subnets
+}
+
+output "task_assigns_public_ip" {
+  description = "Whether the task ENI takes a public IP. True means the egress source address changes on every run."
+  value       = var.task_in_public_subnet
+}
+
+output "rds_subnet_ids" {
+  description = "Private subnets holding RDS. Never public."
   value       = module.vpc.private_subnets
 }
 
@@ -68,7 +78,7 @@ output "vpc_id" {
 }
 
 output "nat_gateway_ids" {
-  description = "NAT gateway IDs providing egress for the private subnets."
+  description = "NAT gateway IDs providing egress for the private subnets. Empty when task_in_public_subnet is true — no NAT gateway is created in that mode."
   value       = module.vpc.natgw_ids
 }
 

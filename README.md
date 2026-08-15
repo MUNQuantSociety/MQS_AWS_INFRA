@@ -33,7 +33,7 @@ MQS_AWS_INFRA/
 └── terraform/
     ├── environments/
     │   ├── Backtest_Visualizer/            # Visualizer API: Fargate + ALB, no NAT, external DB
-    │   └── Livetrading/                    # Trading bot + RDS, private subnets behind one NAT
+    │   └── Livetrading/                    # Trading bot in public subnets, RDS private, no NAT
     │       ├── main.tf                     # Module composition
     │       ├── locals.tf                   # name_prefix, log group, secret wiring
     │       ├── variables.tf                # All input variables
@@ -66,11 +66,11 @@ MQS_AWS_INFRA/
             └── ecs-service-api/            # API task definition + ECS Service
 ```
 
-**Two independent stacks.** `Livetrading` runs the trading bot and RDS in
-private subnets behind a single NAT gateway. `Backtest_Visualizer`
-runs the visualizer API on Fargate behind an ALB with **no NAT gateway** and no
-database of its own. They share no state, no VPC and no modules — being in one
-repository does not put them on one network.
+**Two independent stacks.** `Livetrading` runs the trading bot in public subnets
+on an egress-only security group, with RDS private and **no NAT gateway**.
+`Backtest_Visualizer` runs the visualizer API on Fargate behind an ALB, also with
+no NAT gateway and no database of its own. They share no state, no VPC and no
+modules — being in one repository does not put them on one network.
 
 **Why modules are split by stack rather than pooled.** Six module names overlap,
 but only some are the same thing (`networking` decorates a VPC in one stack and
@@ -120,11 +120,12 @@ Full deploy steps in [docs/operations.md](docs/operations.md#deploy).
 | **SSM Parameter Store** | DB credentials and API keys as SecureString params, injected by ECS at task start |
 | **CloudWatch Logs** | Single log group for both workloads, split by stream prefix |
 | **IAM** | Task execution role, task role, scheduler invoke role |
-| **VPC / EC2 networking** | Purpose-built VPC: private subnets for all workloads, public subnets for the IGW + a single NAT gateway, free S3 gateway endpoint, two managed security groups |
+| **VPC / EC2 networking** | Purpose-built VPC: public subnets carry the IGW and the scheduled task, private subnets carry RDS only, free S3 gateway endpoint, two managed security groups. No NAT gateway |
 
 ## Future work
 
 - Add a stop-task schedule as a safety net if `is_market_open` stays true past close.
 - CloudWatch Alarm + SNS on `ECSTaskStateChange` failures.
-- Second NAT gateway for HA egress (`single_nat_gateway = false`, ~+$32/mo) if
-  the batch workload ever becomes latency- or availability-critical.
+- A stable egress IP (`task_in_public_subnet = false`, ~+$32/mo for the NAT
+  gateway and its Elastic IP) if any market data provider starts IP-allowlisting.
+  Today none do, and Fargate cannot hold an Elastic IP on its own.

@@ -58,7 +58,7 @@ variable "az_count" {
 }
 
 variable "private_subnet_cidrs" {
-  description = "Private subnet CIDRs. Fargate tasks and RDS live here. Must have az_count entries."
+  description = "Private subnet CIDRs. RDS always lives here; the Fargate task joins it when task_in_public_subnet is false. Must have az_count entries."
   type        = list(string)
   default     = ["10.0.1.0/24", "10.0.2.0/24"]
 
@@ -69,7 +69,7 @@ variable "private_subnet_cidrs" {
 }
 
 variable "public_subnet_cidrs" {
-  description = "Public subnet CIDRs. Carry only the IGW + NAT gateway. Must have az_count entries."
+  description = "Public subnet CIDRs. Carry the IGW, and the Fargate task itself when task_in_public_subnet is true. Must have az_count entries."
   type        = list(string)
   default     = ["10.0.4.0/24", "10.0.5.0/24"]
 
@@ -79,8 +79,33 @@ variable "public_subnet_cidrs" {
   }
 }
 
+variable "task_in_public_subnet" {
+  description = <<EOT
+Run the scheduled Fargate task in the public subnets with a public IP on its
+ENI, egressing straight out the internet gateway. RDS stays private either way.
+
+true (default) creates NO NAT gateway -- the private tier would then hold only
+RDS, which makes no outbound connections, so a gateway there routes nothing for
+~$32/mo. Security is unchanged: the task SG has zero ingress rules, so the public
+IP is an egress address and not an inbound path, and RDS keeps no public
+endpoint.
+
+THE COST OF true IS THE SOURCE ADDRESS. Fargate cannot hold an Elastic IP; a
+public-subnet task gets a fresh public IP at every start, so outbound calls to
+FMP / Alpha Vantage / Apify have no stable source. Set this false if any provider
+IP-allowlists this stack -- that puts the task back in the private subnets behind
+a NAT gateway with a stable EIP, and restores the ~$32/mo.
+
+Flipping this replaces nothing durable: the task definition is unchanged and the
+scheduler is updated in place, so the next scheduled run picks up the new
+placement. There is no data to migrate.
+EOT
+  type        = bool
+  default     = true
+}
+
 variable "single_nat_gateway" {
-  description = "One NAT gateway for all AZs (~$32/mo) instead of one per AZ (~$97/mo). Set false for HA egress."
+  description = "One NAT gateway for all AZs (~$32/mo) instead of one per AZ (~$97/mo). Set false for HA egress. Only has an effect when task_in_public_subnet is false -- otherwise no NAT gateway is created at all."
   type        = bool
   default     = true
 }

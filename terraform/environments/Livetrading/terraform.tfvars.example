@@ -22,21 +22,34 @@ image_tag           = "1.0.5-6"
 github_repository   = "MUNQuantSociety/MQSMaster"
 # github_allowed_refs = ["ref:refs/heads/main", "ref:refs/heads/dev"]
 
-# Networking. Defaults build a dedicated VPC: workloads in private subnets,
-# IGW + one NAT gateway in the public subnets. All optional - omit to accept
-# the defaults below.
+# Networking. Defaults build a dedicated VPC with the scheduled task in the
+# PUBLIC subnets and RDS in the private ones. All optional - omit to accept the
+# defaults below.
 #
-# single_nat_gateway is the main cost lever here: true = one NAT (~$32/mo),
-# false = one per AZ (~$97/mo) for HA egress.
+# task_in_public_subnet is the cost lever, and the only one that matters here:
+#   true  (default) - task egresses out the IGW on a public IP. NO NAT gateway is
+#                     created, saving ~$32/mo. The task SG still has zero ingress
+#                     rules, so nothing is reachable from outside; RDS stays
+#                     private with no public endpoint.
+#   false           - task moves to the private subnets behind a NAT gateway.
+#                     Costs ~$32/mo and buys ONE thing: a stable egress IP.
+#
+# Set it false if a market data provider IP-allowlists you. Fargate cannot hold
+# an Elastic IP, so in public mode the task's outbound address is fresh on every
+# run and there is nothing to register with a provider.
+#
+# single_nat_gateway only applies when task_in_public_subnet = false: true = one
+# NAT (~$32/mo), false = one per AZ (~$97/mo) for HA egress.
 #
 # az_count = 2 is the floor: RDS subnet groups require two AZs. It is NOT a cost
-# lever -- single_nat_gateway caps NAT at one gateway whatever the AZ count, and
-# subnets/route tables/IGW carry no hourly charge. Raise it for spread, not spend.
-vpc_cidr             = "10.0.0.0/16"
-az_count             = 2
-private_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24"] # tasks + RDS
-public_subnet_cidrs  = ["10.0.4.0/24", "10.0.5.0/24"] # IGW + NAT only
-single_nat_gateway   = true
+# lever -- subnets/route tables/IGW carry no hourly charge. Raise it for spread,
+# not spend.
+vpc_cidr              = "10.0.0.0/16"
+az_count              = 2
+private_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"] # RDS (+ task when private)
+public_subnet_cidrs   = ["10.0.4.0/24", "10.0.5.0/24"] # IGW + task
+task_in_public_subnet = true
+single_nat_gateway    = true
 
 # Market task (scheduled, Mon-Fri). The only workload in this stack -- there is
 # no always-on ECS Service, so nothing runs between scheduled sessions.

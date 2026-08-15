@@ -210,9 +210,10 @@ days.
 > nothing to stdout, which reads identically to "no state".
 >
 > So `terraform apply` is a **full create**, not an incremental change. Budget for
-> it: a VPC with one NAT gateway (~$32/mo at `single_nat_gateway = true`), an RDS
-> `db.t4g.small` with 100 GB gp3, the ECS cluster, both services, the SSM parameter groups and
-> the scheduler. Read the plan before confirming.
+> it: a VPC (no NAT gateway at the default `task_in_public_subnet = true`; ~$32/mo
+> if you set it false), an RDS `db.t4g.small` with 100 GB gp3, the ECS cluster,
+> both services, the SSM parameter groups and the scheduler. Read the plan before
+> confirming.
 >
 > **What this means for the warnings below.** Because there is no state, the usual
 > hazards are inert: a plan cannot propose destroying resources it does not track,
@@ -323,13 +324,15 @@ the newest ACTIVE revision on its own.
 ## Manually trigger the market task
 
 ```bash
-aws ecs run-task --cluster $(terraform output -raw ecs_cluster_name) --task-definition $(terraform output -raw market_task_definition_family) --launch-type FARGATE --network-configuration "awsvpcConfiguration={subnets=[$(terraform output -json task_subnet_ids | jq -r 'join(",")')],securityGroups=[$(terraform output -raw task_security_group_id)],assignPublicIp=DISABLED}"
+aws ecs run-task --cluster $(terraform output -raw ecs_cluster_name) --task-definition $(terraform output -raw market_task_definition_family) --launch-type FARGATE --network-configuration "awsvpcConfiguration={subnets=[$(terraform output -json task_subnet_ids | jq -r 'join(",")')],securityGroups=[$(terraform output -raw task_security_group_id)],assignPublicIp=$(terraform output -raw task_assigns_public_ip | tr '[:lower:]' '[:upper:]' | sed 's/TRUE/ENABLED/;s/FALSE/DISABLED/')}"
 ```
 
-`assignPublicIp` **must be `DISABLED`**. `task_subnet_ids` now returns private
-subnets, and Fargate rejects a task that asks for a public IP in a subnet with no
-route to an internet gateway. Egress still works — it goes out via the NAT
-gateway.
+**`assignPublicIp` must match the subnet tier**, which is why both are read from
+outputs rather than hardcoded. At the default `task_in_public_subnet = true`,
+`task_subnet_ids` returns the public subnets and the value must be `ENABLED` — a
+public-subnet task without a public IP has no internet path at all and dies at
+image pull. Set `task_in_public_subnet = false` and both flip together: private
+subnets, `DISABLED`, egress via the NAT gateway.
 
 ## Logs
 

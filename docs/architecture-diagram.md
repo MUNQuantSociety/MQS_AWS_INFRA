@@ -1,7 +1,13 @@
 # Architecture diagram — Livetrading (deployed)
 
-Reflects what is actually running in `us-east-2` as of 2026-08-09: 48 resources,
+Reflects what is actually running in `us-east-2` as of 2026-08-15: 45 resources,
 applied from `terraform/environments/Livetrading`.
+
+The task runs in the **public** subnets (`task_in_public_subnet = true`, the
+default) and RDS stays private. There is no NAT gateway. Set that variable to
+`false` for the older layout — task private, egress via a NAT gateway with a
+stable Elastic IP — which is the configuration to use if a data provider ever
+IP-allowlists this stack.
 
 Structural only — no account ID, resource IDs, endpoints or IP addresses. This
 repository is public, and those values date the moment anything is replaced.
@@ -29,17 +35,16 @@ flowchart TB
         subgraph vpc["VPC 10.0.0.0/16 · 2 AZs"]
             direction TB
 
-            subgraph priv["Private subnets · 10.0.1.0/24, 10.0.2.0/24"]
-                TASK["ECS Fargate task<br/>mqsmaster-prod · 2 vCPU / 8 GB<br/>ephemeral, no public IP"]
-                RDS["RDS PostgreSQL 16<br/>db.t4g.small · 100 GB gp3<br/>no public endpoint"]
-            end
-
             subgraph pub["Public subnets · 10.0.4.0/24, 10.0.5.0/24"]
-                NAT["NAT gateway<br/>single, stable Elastic IP"]
+                TASK["ECS Fargate task<br/>mqsmaster-prod · 2 vCPU / 8 GB<br/>ephemeral · public IP, fresh each run"]
                 IGW["Internet gateway"]
             end
 
-            S3E["S3 gateway endpoint<br/>free · keeps image pulls off the NAT"]
+            subgraph priv["Private subnets · 10.0.1.0/24, 10.0.2.0/24"]
+                RDS["RDS PostgreSQL 16<br/>db.t4g.small · 100 GB gp3<br/>no public endpoint, no egress"]
+            end
+
+            S3E["S3 gateway endpoint<br/>free · short-circuits image pulls"]
         end
     end
 
@@ -52,16 +57,22 @@ flowchart TB
     S3E -.-> TASK
     SSM -->|"injected as env vars at task start"| TASK
     TASK -->|"stdout / stderr"| CW
-    TASK -->|"5432, SG to SG only"| RDS
-    TASK -->|"HTTPS"| NAT
-    NAT --> IGW
+    TASK -->|"5432, SG to SG only, private IP"| RDS
+    TASK -->|"HTTPS"| IGW
     IGW --> APIS
 ```
 
-**There is no inbound path.** No load balancer, no public IP on the task ENI, no
-public RDS endpoint. The task security group has zero ingress rules and allows
-all egress; the database security group accepts `5432` only from the task
-security group.
+**There is still no inbound path.** No load balancer, no public RDS endpoint, and
+the task security group has zero ingress rules while allowing all egress. The
+task ENI does carry a public IP, but with no ingress rule nothing on it is
+reachable — it is an egress source address, not a door. The database security
+group accepts `5432` only from the task security group, which holds across
+subnet tiers because the task reaches RDS by its private IP inside the VPC.
+
+**Egress has no stable source address.** Fargate cannot hold an Elastic IP, so
+the task's public IP is assigned at start and differs on every run. Nothing in
+the stack depends on that address today. If a data provider starts
+IP-allowlisting, `task_in_public_subnet = false` is the fix.
 
 ## A scheduled run
 
@@ -75,7 +86,7 @@ sequenceDiagram
     participant L as CloudWatch Logs
 
     Note over S: Mon-Fri 11:00 America/St_Johns = 09:30 ET open
-    S->>E: RunTask against the task definition family
+    S->>E: RunTask in the public subnets, assignPublicIp ENABLED
     E->>R: pull livetradingbot image via the S3 endpoint
     E->>P: GetParameters, 9 SecureStrings
     P-->>E: credentials as container env vars
@@ -93,7 +104,7 @@ and no `UpdateService` call.
 
 | Service | Resources | Notes |
 |---|---|---|
-| VPC / EC2 networking | ~19 | VPC, 2 private + 2 public subnets, IGW, 1 NAT + EIP, route tables |
+| VPC / EC2 networking | ~16 | VPC, 2 private + 2 public subnets, IGW, route tables. No NAT gateway, no EIP |
 | Security groups + endpoint | 2 | Egress-only task SG, free S3 gateway endpoint |
 | RDS PostgreSQL 16 | 3 | Instance, subnet group, DB SG. Deletion protection on |
 | SSM Parameter Store | 9 | 6 × `/db/*`, 3 × `/api/*`, all SecureString, all write-only |
@@ -104,7 +115,7 @@ and no `UpdateService` call.
 | EventBridge Scheduler | 3 | Schedule + RunTask role + policy |
 | CloudWatch Logs | 1 | One group, 7 day retention |
 | ECR lifecycle policy | 1 | Repo is adopted, not created |
-| **Total** | **48** | |
+| **Total** | **45** | |
 
 ## Deliberately absent
 
@@ -112,7 +123,7 @@ and no `UpdateService` call.
 |---|---|
 | Always-on ECS Service | Removed. One workload, on a schedule — the cluster is idle between sessions |
 | Load balancer | Nothing listens; there is no inbound path |
-| Second NAT gateway | `single_nat_gateway = true`. One AZ failure point for egress, ~$65/mo saved |
+| NAT gateway | `task_in_public_subnet = true`. The private tier holds only RDS, which makes no outbound calls, so a gateway there would route nothing for ~$32/mo. Costs the stable egress IP |
 | DynamoDB lock table | State locking is S3-native `use_lockfile`; `dynamodb_table` is deprecated in AWS provider 6.x |
 | Backtest_Visualizer stack | Separate state key, never applied. Deployable later with no rework |
 | CloudWatch alarms / SNS | Listed in the README as future work |
@@ -126,6 +137,6 @@ policy are on. See [operations.md](operations.md#state-backend).
 
 ## Cost
 
-~$87–102/mo. RDS is the largest line, the NAT gateway second, Fargate compute
-smallest because it bills only for the hours a session actually runs. Full
-breakdown in [cost-model.md](cost-model.md).
+~$54–69/mo. RDS is almost the entire bill now that the NAT gateway is gone;
+Fargate compute is smallest because it bills only for the hours a session
+actually runs. Full breakdown in [cost-model.md](cost-model.md).
