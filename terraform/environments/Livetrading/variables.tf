@@ -299,8 +299,8 @@ EOT
   sensitive = true
   default = {
     db_user  = "mqsadmin"
-    password = "REPLACE_ME"
-    host     = "" # ignored — RDS endpoint injected at apply time
+    password = "password" # must be set in terraform.tfvars
+    host     = ""         # ignored — RDS endpoint injected at apply time
     port     = "5432"
     database = "mqsdb"
     sslmode  = "prefer"
@@ -316,8 +316,8 @@ variable "api_secret_values" {
   })
   sensitive = true
   default = {
-    FMP_API_KEY = "REPLACE_ME"
-    ALPHA_KEY   = "REPLACE_ME"
-    APIFY_KEY   = "REPLACE_ME"
+    FMP_API_KEY = "FMP_API_KEY"
+    ALPHA_KEY   = "ALPHA_KEY"
+    APIFY_KEY   = "APIFY_KEY"
   }
 }

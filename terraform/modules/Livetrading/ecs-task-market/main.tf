@@ -1,8 +1,8 @@
 ###############################################################################
 # Market-hours Fargate task definition.
 #
-# Runs start.sh after stripping the persistent_scripts=( ... ) array, so this
-# task only spawns market-hours scripts. NLP runs as its own always-on service.
+# Runs start.sh with SKIP_PERSISTENT_SCRIPTS=1, so this task only spawns
+# market-hours scripts. NLP runs as its own always-on service.
 ###############################################################################
 
 locals {
@@ -44,25 +44,13 @@ resource "aws_ecs_task_definition" "this" {
       image     = var.image_uri
       essential = true
 
-      # Dockerfile sets USER appuser; override to root so apt-get can install
-      # curl+jq (required by start.sh) before exec'ing it. Cleaner long-term
-      # fix: bake curl+jq into the Dockerfile runtime stage.
-      user = "0"
-
       entryPoint = ["/bin/bash", "-c"]
       command = [
         join(" && ", [
-          "apt-get update",
-          "apt-get install -y --no-install-recommends curl jq ca-certificates",
-          "rm -rf /var/lib/apt/lists/*",
           # start.sh sources .env (or falls back to empty .env.example which
           # would clobber the ECS-injected env vars). Materialise a real .env
           # from the secrets ECS already injected, so source preserves them.
           "{ ${local.env_writer}; } > .env",
-          # NLP is its own ECS service. Delete persistent_scripts=( ... ) so
-          # this task does NOT also spawn NLP. The downstream for-loop becomes
-          # a no-op on an unset array.
-          "sed -i '/^persistent_scripts=(/,/^)/d' ./start.sh",
           "exec ./start.sh",
         ])
       ]
@@ -72,6 +60,9 @@ resource "aws_ecs_task_definition" "this" {
       environment = [
         { name = "PYTHONUNBUFFERED", value = "1" },
         { name = "PYTHON_VENV", value = "/app/MQS/bin/python" },
+        # NLP is its own ECS service; this flag stops start.sh from also
+        # spawning it (persistent_scripts becomes an empty array).
+        { name = "SKIP_PERSISTENT_SCRIPTS", value = "1" },
       ]
 
       secrets = var.container_secrets
