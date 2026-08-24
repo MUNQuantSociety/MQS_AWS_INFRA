@@ -241,6 +241,34 @@ variable "market_task_memory" {
 }
 
 ###############################################################################
+# NLP task (always-on)
+###############################################################################
+
+variable "nlp_task_cpu" {
+  description = <<EOT
+Fargate NLP task CPU units. 512 = .5 vCPU is the practical floor for FinBERT;
+256 also works (cheaper, slower batches).
+EOT
+  type        = string
+  default     = "512"
+}
+
+variable "nlp_task_memory" {
+  description = <<EOT
+Fargate NLP task memory in MiB. FinBERT-base loaded ≈ 1-2 GB; 2048 is the
+practical floor. Must form a valid Fargate CPU/memory pair.
+EOT
+  type        = string
+  default     = "2048"
+}
+
+variable "nlp_desired_count" {
+  description = "Number of always-on NLP service replicas."
+  type        = number
+  default     = 1
+}
+
+###############################################################################
 # Logging
 ###############################################################################
 

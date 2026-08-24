@@ -32,8 +32,23 @@ output "market_container_name" {
   value       = module.ecs_task_market.container_name
 }
 
+output "nlp_task_definition_family" {
+  description = "Always-on NLP task definition family."
+  value       = module.ecs_service_nlp.task_definition_family
+}
+
+output "nlp_service_name" {
+  description = "Always-on NLP ECS service name."
+  value       = module.ecs_service_nlp.service_name
+}
+
+output "nlp_container_name" {
+  description = "NLP container name (for CI/CD render step)."
+  value       = module.ecs_service_nlp.container_name
+}
+
 output "log_group_name" {
-  description = "CloudWatch log group for the market task."
+  description = "CloudWatch log group for both the market task and the NLP service."
   value       = module.cloudwatch_logs.log_group_name
 }
 

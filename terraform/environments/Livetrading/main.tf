@@ -157,15 +157,44 @@ module "ecs_task_market" {
 }
 
 ###############################################################################
+# Always-on NLP service. Restored after being dropped in #14 ("single scheduled
+# workload") for cost -- ~$18-20/mo for the default 512 CPU / 2048 MiB always-on
+# task. Placement follows task_in_public_subnet, same as the market task and the
+# scheduler: in the default (public) mode there is no NAT gateway at all
+# (enable_nat_gateway = !var.task_in_public_subnet above), so a private-subnet,
+# no-public-IP NLP task would have no route to the internet and could reach
+# neither its API providers nor pull its image.
+###############################################################################
+
+module "ecs_service_nlp" {
+  source = "../../modules/Livetrading/ecs-service-nlp"
+
+  name_prefix             = local.name_prefix
+  image_uri               = local.image_uri
+  task_cpu                = var.nlp_task_cpu
+  task_memory             = var.nlp_task_memory
+  desired_count           = var.nlp_desired_count
+  task_execution_role_arn = module.iam_roles.task_execution_role_arn
+  task_role_arn           = module.iam_roles.task_role_arn
+  cluster_id              = module.ecs_cluster.cluster_id
+  subnet_ids              = var.task_in_public_subnet ? module.vpc.public_subnets : module.vpc.private_subnets
+  security_group_id       = module.networking.task_security_group_id
+  assign_public_ip        = var.task_in_public_subnet
+  container_secrets       = local.container_secrets
+  log_group_name          = module.cloudwatch_logs.log_group_name
+  aws_region              = var.aws_region
+}
+
+###############################################################################
 # CI/CD identity. The deploy workflow (.github/workflows/deploy.yml, which must
 # live in the MQSMaster repo alongside its Dockerfile) assumes this role via
 # OIDC -- no static AWS access keys anywhere. Feed the deploy_role_arn output
 # into that repo's AWS_DEPLOY_ROLE_ARN secret.
 #
-# The stack runs no ECS Service, so the deploy role grants no ecs:UpdateService.
-# CI's job ends at RegisterTaskDefinition: the scheduler targets the task
-# definition FAMILY rather than a pinned revision, so the next scheduled run
-# picks the new revision up on its own.
+# The deploy role grants ecs:UpdateService/DescribeServices scoped to the NLP
+# service ARN, because unlike the scheduled market task (which the scheduler
+# picks up by task-definition FAMILY, unpinned) an ECS Service pins a specific
+# revision and only moves when told to.
 ###############################################################################
 
 module "github_oidc" {
@@ -176,6 +205,7 @@ module "github_oidc" {
   allowed_refs      = var.github_allowed_refs
 
   ecr_repository_arn      = module.ecr_repository.repository_arn
+  nlp_service_arn         = module.ecs_service_nlp.service_arn
   task_execution_role_arn = module.iam_roles.task_execution_role_arn
   task_role_arn           = module.iam_roles.task_role_arn
 }
