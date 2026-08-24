@@ -3,50 +3,217 @@
 All commands assume `terraform/environments/Livetrading` as the working directory and a
 configured AWS profile in `us-east-2`.
 
+## Credential handling — read before your first command
+
+**This repository is public** (`MUNQuantSociety/MQS_AWS_INFRA`). A credential
+pushed here is compromised the second it lands: GitHub keeps unreachable objects
+after a force-push, forks keep their own copy, and the public events firehose is
+scraped continuously. Deleting the commit does not undo it. The only remedy is
+rotation.
+
+### One-time setup per clone
+
+Git does not transport hooks, so this is not automatic:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+That activates [`.githooks/pre-commit`](../.githooks/pre-commit), which refuses
+to commit credential-shaped paths (`*.tfvars`, `*.tfstate`, `.env*`, `*.pem`,
+`*accessKeys*.csv`) and credential-shaped values in staged content. It is a
+convenience layer only — `--no-verify` skips it. The authority is
+[`.github/workflows/secret-scan.yml`](../.github/workflows/secret-scan.yml),
+which runs gitleaks over the **full history** on every push and cannot be
+skipped from a developer machine.
+
+Verify the guard is live before trusting it:
+
+```bash
+git check-ignore -v terraform/environments/Livetrading/terraform.tfvars
+```
+
+An empty result means the ignore rule is NOT matching — stop and fix
+`.gitignore` before writing any real value to disk.
+
+### Where AWS credentials come from
+
+Terraform runs entirely on your machine against your AWS credentials, and the
+S3 backend authenticates with those same credentials — so if `aws` works,
+Terraform works, and if it does not, `init` fails on the backend before it
+reaches a single resource.
+
+There are two mechanisms and they are easy to confuse:
+
+| | `aws configure` | `.env` |
+|---|---|---|
+| Writes to | `~/.aws/credentials`, outside the repo | `.env` in the repo root, gitignored |
+| Read automatically | Yes, by both aws CLI and Terraform | **No — by nothing** |
+| Selected with | `AWS_PROFILE`, or the `default` profile | Loading it into the shell first |
+
+**Nothing reads `.env` on its own.** Terraform and the aws CLI read the process
+environment; neither knows what a `.env` file is. The file is inert until it is
+loaded:
+
+```bash
+.\scripts\load-env.ps1
+```
+
+```bash
+set -a && . ./.env && set +a
+```
+
+Once per terminal, before `terraform` or `aws`. A new terminal is a new process,
+so it has to be run again there — if `aws sts get-caller-identity` suddenly
+starts reporting no credentials, that is the reason.
+
+`scripts/load-env.ps1` skips comments and blank values, strips surrounding
+quotes while leaving JSON values like `TF_VAR_db_secret_values={...}` intact,
+and warns on a line it cannot parse rather than dropping it silently. It also
+warns if `.env` is readable beyond your own account, which matters here because
+the tree sits under OneDrive and a loose ACL syncs with the file.
+
+Restrict it after filling it in:
+
+```bash
+icacls .env /inheritance:r /grant:r "$env:USERNAME:R"
+```
+
+`AWS_REGION` in `.env` is for the aws CLI only. Terraform takes its region from
+`var.aws_region` in `providers.tf`, so the two are set independently.
+
+### Prefer environment variables over `terraform.tfvars`
+
+Terraform reads a sensitive variable from `TF_VAR_<name>` exactly as it would
+from a tfvars file. Using the env-var route means **no plaintext credential file
+exists on disk at all**, which removes the whole class of accidents: a
+force-add, a `cp -r` into a new environment directory, an editor backup file, or
+OneDrive syncing the tree to another machine. This tree does live under
+OneDrive, so that last one is not hypothetical.
+
+```bash
+cp .env.example .env      # gitignored by the `.env*` rule
+chmod 600 .env            # git-bash honours this; on plain Windows use file ACLs
+set -a && . ./.env && set +a
+terraform plan
+```
+
+If you do use `terraform.tfvars`, keep it mode 600, never copy it between
+environment directories, and never pass `-var` on the command line — arguments
+land in shell history and in the process list.
+
+### Commands that leak, and what to run instead
+
+| Do not run | Why | Instead |
+|---|---|---|
+| `terraform plan -out=tfplan` | The plan file embeds every root variable value in cleartext, including passwords | Plan without `-out`; if you need one, treat it as a secret and delete it |
+| `terraform show -json` / `terraform state pull` piped into a file | Non-write-only attributes appear in cleartext | Read specific outputs with `terraform output -raw <name>` |
+| `terraform output` with no argument, in CI | Prints every output, sensitive ones included | `terraform output -raw <name>`, one at a time |
+| `aws ssm put-parameter --value '<secret>'` | Lands in shell history and `ps` output | `--value "file:///path"`, then delete the file |
+| `aws ssm get-parameter --with-decryption` in a shared terminal | Prints the credential to a scrollback that may be screenshotted | Only when you actually need the value; clear scrollback after |
+| `terraform apply` with `TF_LOG=DEBUG` | Debug logs contain request bodies with credential values | Leave `TF_LOG` unset, or write to a gitignored path and delete it |
+
+The write-only arguments (`value_wo`, `password_wo`) already keep SSM parameter
+values and the RDS master password out of Terraform state and plan output — see
+[modules/Livetrading/ssm-parameters](../terraform/modules/Livetrading/ssm-parameters/main.tf).
+That protection covers those specific attributes, not the tfvars file you typed
+them into.
+
+### Placeholders now fail the plan
+
+`db_secret_values`, `api_secret_values` and `market_data_secret_values` all carry
+`REPLACE_ME` defaults so the modules parse without credentials. Each now has a
+`validation` block rejecting that value, so a forgotten tfvars fails at plan
+time instead of provisioning RDS with the literal master password
+`REPLACE_ME`. `MARKET_DATA_SSLMODE` is likewise constrained to
+`require`/`verify-ca`/`verify-full`, because that connection crosses the public
+internet and `prefer` silently downgrades to plaintext.
+
+### If a credential does reach GitHub
+
+Order matters — rotate first, clean history second, because the credential is
+already scraped by the time you notice.
+
+1. Rotate the credential at the source (IAM, RDS, the vendor console).
+2. `aws ssm put-parameter --overwrite` the new value, then
+   `aws ecs update-service --force-new-deployment` so running tasks pick it up.
+3. Only then rewrite history (`git filter-repo`), and open a GitHub support
+   request to expire the cached objects — a force-push alone leaves them
+   reachable by SHA.
+4. Check CloudTrail for use of the exposed credential between push and rotation.
+
+## State backend
+
+State lives in **S3**, not HCP Terraform. There is no `cloud` block and
+`terraform login` is not part of this workflow.
+
+| | |
+|---|---|
+| Bucket | `mqs-terraform-state` (`us-east-2`) |
+| Livetrading key | `mqsmaster/Livetrading/terraform.tfstate` |
+| Backtest_Visualizer key | `mqs-backtest-visualizer/Backtest_Visualizer/terraform.tfstate` |
+| Locking | S3-native `use_lockfile = true` — no DynamoDB table |
+
+The distinct keys are what keep the two stacks' states independent, the job the
+separate HCP workspaces used to do. One key holds one state, so pointing both
+stacks at the same key would make each plan propose destroying the other's
+resources.
+
+Locking is a conditional write of a `<key>.tflock` object next to the state, so
+two concurrent applies cannot both win. `dynamodb_table` is deprecated as of AWS
+provider 6.x and is not used. A lock left behind by a killed run is released
+with `terraform force-unlock <lock-id>` — check that no apply is genuinely still
+running first.
+
+### Recreating the bucket
+
+A backend cannot provision the bucket that holds its own state, so the bucket is
+a one-time manual step. It already exists; this is here for a rebuild or a new
+account.
+
+```bash
+aws s3api create-bucket --bucket mqs-terraform-state --region us-east-2 --create-bucket-configuration LocationConstraint=us-east-2
+```
+
+```bash
+aws s3api put-public-access-block --bucket mqs-terraform-state --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+```
+
+```bash
+aws s3api put-bucket-versioning --bucket mqs-terraform-state --versioning-configuration Status=Enabled
+```
+
+**Versioning is not optional.** State is the only record of what Terraform
+created; a corrupted or truncated write with versioning off is unrecoverable and
+every managed resource becomes an orphan. With it on, roll back to the previous
+object version.
+
+The live bucket also has SSE-S3 default encryption, a bucket policy denying
+non-TLS requests, and a lifecycle rule expiring noncurrent versions after 90
+days.
+
 > **Nothing is deployed yet — the next apply builds the whole stack.**
-> Verified against the HCP API and AWS on 2026-08-03.
+> Verified against AWS on 2026-08-09.
 >
-> `MQS_AWS_INFRA_LIVE` (org `MQS`) exists and is bound correctly, but it holds
-> **no state**: zero resources, zero state versions, and no run has ever
-> executed. `MQS_AWS_INFRA_BTV` is likewise empty. In `us-east-2` the account has
-> no VPC beyond the default, no RDS instance, no `mqsmaster-prod-cluster`, no
-> `/mqsmaster-prod/*` SSM parameters and no IAM OIDC provider.
+> The state bucket holds no state object for either key: no apply has run. In
+> `us-east-2` the account has no VPC beyond the default, no RDS instance, no
+> `mqsmaster-prod-cluster`, no `/mqsmaster-prod/*` SSM parameters and no IAM
+> OIDC provider.
 >
-> An earlier local state exists in this stack's directory as `terraform.tfstate`
-> (gitignored, `serial=56`) and tracks **zero** resources — the stack was managed
-> locally, then emptied. It was never migrated to HCP, and there is nothing in it
-> to migrate. `terraform init` may offer to copy it up. Accepting is safe **only
-> when the source is a state you have approved and the destination is empty** —
-> re-check both before agreeing, because these facts age.
->
-> Inspect the two sides separately. Do not use `terraform state list` for this:
-> it reports whichever state is currently configured — the local file before
-> `init`, the remote workspace after — so it silently answers a different question
-> depending on when you run it.
+> Confirm before applying — an empty listing means no state exists yet:
 >
 > ```bash
-> # Source: read the local file directly, independent of any backend config.
-> jq -r '"serial=\(.serial) resources=\((.resources // []) | length)"' terraform.tfstate
->
-> # Destination: confirm the workspace you are bound to, then its resource count.
-> grep -A6 'cloud {' terraform.tf        # organization + workspace name
+> aws s3 ls s3://mqs-terraform-state --recursive
 > ```
 >
-> Read the destination count from the workspace's page in HCP, or via the API —
-> `GET /api/v2/organizations/<org>/workspaces/<name>`, field
-> `attributes.resource-count`.
->
-> Proceed only when the destination is empty. If **either** side tracks
-> resources, **stop**: copying a populated local state into a workspace that
-> already holds one silently picks a winner, and the losing resources keep
-> running while nothing manages them. Reconcile deliberately with
-> `terraform state pull` / `push` or targeted imports instead of accepting the
-> prompt.
+> Treat a **failed** call as unknown, not as empty. An `AccessDenied` prints
+> nothing to stdout, which reads identically to "no state".
 >
 > So `terraform apply` is a **full create**, not an incremental change. Budget for
-> it: a VPC with one NAT gateway (~$32/mo at `single_nat_gateway = true`), an RDS
-> `db.t4g.medium`, the ECS cluster, both services, the SSM parameter groups and
-> the scheduler. Read the plan before confirming.
+> it: a VPC (no NAT gateway at the default `task_in_public_subnet = true`; ~$32/mo
+> if you set it false), an RDS `db.t4g.small` with 100 GB gp3, the ECS cluster,
+> both services, the SSM parameter groups and the scheduler. Read the plan before
+> confirming.
 >
 > **What this means for the warnings below.** Because there is no state, the usual
 > hazards are inert: a plan cannot propose destroying resources it does not track,
@@ -94,16 +261,12 @@ configured AWS profile in `us-east-2`.
 >   arn:aws:iam::<account-id>:oidc-provider/token.actions.githubusercontent.com
 > ```
 >
-> **Working directory.** Already correct on both workspaces
-> (`/terraform/environments/Livetrading` and
-> `/terraform/environments/Backtest_Visualizer`). Terraform cannot change a
-> workspace setting, so if either is ever renamed again, fix the setting by hand
-> before the next run. Both workspaces run in **local** execution mode: runs
-> happen on your machine with your AWS credentials and HCP only stores state, so
-> a stale working-directory path surfaces as a local error rather than a remote
-> run planning against an empty directory.
+> **Working directory.** Every run happens wherever you invoke it, against your
+> local AWS credentials — there is no remote runner and no configured working
+> directory to drift. `cd` into the right environment directory before
+> `init`/`plan`/`apply`; that is the whole mechanism.
 >
-> Two stacks must never share one workspace — one workspace holds one state, so
+> The two stacks must never share one state key — one key holds one state, so
 > each stack's plan would propose destroying the other's resources.
 
 ## Deploy
@@ -126,8 +289,6 @@ Outputs after apply:
 ecr_repository_url            = "<acct>.dkr.ecr.us-east-2.amazonaws.com/livetradingbot"
 ecs_cluster_name              = "mqsmaster-prod-cluster"
 market_task_definition_family = "mqsmaster-prod"
-nlp_task_definition_family    = "mqsmaster-prod-nlp"
-nlp_service_name              = "mqsmaster-prod-nlp"
 log_group_name                = "/ecs/mqsmaster-prod"
 rds_endpoint                  = "<id>.<region>.rds.amazonaws.com:5432"
 ```
@@ -154,20 +315,24 @@ Then set `image_tag` in `terraform.tfvars` to the tag you just pushed
 (`1.0.5-5` above) and re-apply. It is currently pinned to `1.0.5-4`; pushing a
 new tag without bumping this deploys the old image.
 
-Note this only governs the *first* revision of each task definition — both the
-market and NLP families carry `ignore_changes = [container_definitions]`, so
-after that CI re-registration is what moves the image.
+Note this only governs the *first* revision of the task definition — the market
+family carries `ignore_changes = [container_definitions]`, so after that CI
+re-registration is what moves the image. There is no ECS Service to update: the
+schedule targets the task definition family, so the next scheduled run picks up
+the newest ACTIVE revision on its own.
 
 ## Manually trigger the market task
 
 ```bash
-aws ecs run-task --cluster $(terraform output -raw ecs_cluster_name) --task-definition $(terraform output -raw market_task_definition_family) --launch-type FARGATE --network-configuration "awsvpcConfiguration={subnets=[$(terraform output -json task_subnet_ids | jq -r 'join(",")')],securityGroups=[$(terraform output -raw task_security_group_id)],assignPublicIp=DISABLED}"
+aws ecs run-task --cluster $(terraform output -raw ecs_cluster_name) --task-definition $(terraform output -raw market_task_definition_family) --launch-type FARGATE --network-configuration "awsvpcConfiguration={subnets=[$(terraform output -json task_subnet_ids | jq -r 'join(",")')],securityGroups=[$(terraform output -raw task_security_group_id)],assignPublicIp=$(terraform output -raw task_assigns_public_ip | tr '[:lower:]' '[:upper:]' | sed 's/TRUE/ENABLED/;s/FALSE/DISABLED/')}"
 ```
 
-`assignPublicIp` **must be `DISABLED`**. `task_subnet_ids` now returns private
-subnets, and Fargate rejects a task that asks for a public IP in a subnet with no
-route to an internet gateway. Egress still works — it goes out via the NAT
-gateway.
+**`assignPublicIp` must match the subnet tier**, which is why both are read from
+outputs rather than hardcoded. At the default `task_in_public_subnet = true`,
+`task_subnet_ids` returns the public subnets and the value must be `ENABLED` — a
+public-subnet task without a public IP has no internet path at all and dies at
+image pull. Set `task_in_public_subnet = false` and both flip together: private
+subnets, `DISABLED`, egress via the NAT gateway.
 
 ## Logs
 
@@ -175,10 +340,12 @@ gateway.
 aws logs tail /ecs/mqsmaster-prod --since 1h --follow
 ```
 
-Filter to one workload by stream prefix:
+Only the market task writes here, under the `mqsmaster/*` stream prefix. Between
+sessions the group is silent — that is expected, not a failure. To confirm a
+session actually ran, list the streams rather than tailing:
 
 ```bash
-aws logs tail /ecs/mqsmaster-prod --log-stream-name-prefix nlp --since 1h --follow
+aws logs describe-log-streams --log-group-name /ecs/mqsmaster-prod --order-by LastEventTime --descending --max-items 5
 ```
 
 ## Rotating secrets
@@ -245,11 +412,17 @@ rotating a single credential.
 This is also the mechanism for fixing `/mqsmaster-prod/db/host` if RDS is ever
 replaced and gets a new endpoint — bump `db_parameter_version` and apply.
 
-Running tasks keep the old value — secrets are read at task start. Force a
-refresh of the always-on NLP service:
+Secrets are read at task start, so a rotation reaches the container at the next
+scheduled run. There is no ECS Service to `--force-new-deployment` — the stack
+runs only the scheduled market task.
+
+A session already in flight keeps the old value for its whole run. If the
+rotation has to land immediately, stop the running task and re-trigger it by
+hand (see [Manually trigger the market task](#manually-trigger-the-market-task)),
+accepting that the session restarts from scratch:
 
 ```bash
-aws ecs update-service --cluster mqsmaster-prod-cluster --service mqsmaster-prod-nlp --force-new-deployment
+aws ecs stop-task --cluster mqsmaster-prod-cluster --task <task-arn> --reason "credential rotation"
 ```
 
 ## Changing the schedule
@@ -290,19 +463,19 @@ chmod 600 terraform/environments/staging/terraform.tfvars
 # credentials issued for staging — do not reuse the live ones
 ```
 
-**Then change the workspace name — this step is not optional.** The copy brings
-`terraform.tf` with it, and that file hardcodes
-`cloud { workspaces { name = "MQS_AWS_INFRA_LIVE" } }`. Left as-is, the new
-directory binds to **production state**, and its first plan reads staging's
+**Then change the state key — this step is not optional.** The copy brings
+`backend.tf` with it, and that file hardcodes
+`key = "mqsmaster/Livetrading/terraform.tfstate"`. Left as-is, the new directory
+reads and writes **production state**, and its first plan reads staging's
 smaller sizing out of `terraform.tfvars` and proposes modifying the live RDS
-instance and ECS services. Create a new workspace and point the copy at it:
+instance and ECS task. Give the copy its own key:
 
-```bash
-# in staging/terraform.tf
-#   workspaces { name = "MQS_AWS_INFRA_STAGING" }
+```hcl
+# in staging/backend.tf
+key = "mqsmaster/staging/terraform.tfstate"
 ```
 
 Only after that does each environment keep its own state and `terraform.tfvars`
-— one workspace holds one state, so the binding is what separates them, not the
-directory. Module sources (`../../modules/Livetrading/...`) resolve identically
-from any environment directory.
+— one key holds one state, so the key is what separates them, not the directory.
+Module sources (`../../modules/Livetrading/...`) resolve identically from any
+environment directory.

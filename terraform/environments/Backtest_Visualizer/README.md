@@ -97,10 +97,10 @@ terraform/
     └── Backtest_Visualizer/            Consumed only by this stack
 ```
 
-Modules are split by owning stack rather than pooled. Livetrading is live in HCP
-Terraform, and a shared module edited for this stack would change resource
-addresses in that stack's state — destroying and recreating production
-resources. The split makes that impossible by construction. The cost is that
+Modules are split by owning stack rather than pooled. Livetrading owns its own
+state, and a shared module edited for this stack would change resource addresses
+in that stack's state — destroying and recreating production resources. The
+split makes that impossible by construction. The cost is that
 four small modules (`cloudwatch-logs`, `ecs-cluster`, `iam-roles`,
 `ecr-repository`) exist in both trees and drift independently; that is the
 intended trade.
@@ -123,20 +123,20 @@ credentials — `aws sts get-caller-identity` must succeed first.
 
 ### State backend
 
-State lives in HCP Terraform. `terraform.tf` binds this stack to the workspace
-**`MQS_AWS_INFRA_BTV`** in the `MQS` organization, which must exist before
-`terraform init`. It does exist, with its working directory already set to
-`/terraform/environments/Backtest_Visualizer`, and holds **no state** as of
-2026-08-03 — zero resources and no run has ever executed, so the first apply
-here is a full create.
+State lives in **S3**, configured in `backend.tf`: bucket
+`mqs-terraform-state` in `us-east-2`, key
+`mqs-backtest-visualizer/Backtest_Visualizer/terraform.tfstate`, locked with
+S3-native `use_lockfile = true` (no DynamoDB table). No HCP account and no
+`terraform login` are involved.
 
-That workspace is deliberately **separate** from Livetrading's
-`MQS_AWS_INFRA_LIVE`. One workspace holds one state, so pointing both stacks at
-a single workspace would make each one's plan propose destroying the other's
-resources.
+That key is deliberately **separate** from Livetrading's
+`mqsmaster/Livetrading/terraform.tfstate`. One key holds one state, so pointing
+both stacks at a single key would make each one's plan propose destroying the
+other's resources.
 
-`backend.tf` holds no configuration — only a commented S3 alternative for taking
-this stack off HCP.
+No state object exists for this key yet — no apply has run, so the first one
+here is a full create. The bucket is created out of band; see
+[operations.md](../../../docs/operations.md#state-backend).
 
 `terraform.tf` carries this stack's `cloud` block and its provider requirements.
 Both stacks declare their own — they were briefly shared through a symlinked

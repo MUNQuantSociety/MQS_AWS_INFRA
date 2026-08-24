@@ -1,63 +1,86 @@
 # Architecture
 
-Two workloads share one container image, one ECS cluster, and one RDS instance.
+One scheduled workload, one ECS cluster, one RDS instance. Nothing runs between
+market sessions.
 
 ```
 GitHub Actions ──build──▶ ECR (livetradingbot)
                               │
-                   ┌──────────┴──────────────────────────────────────────┐
-                   ▼                                                     ▼
-ECS Service mqsmaster-prod-nlp           EventBridge Scheduler ──▶ ECS RunTask mqsmaster-prod
-  always-on Fargate                        cron @ 11:00 America/St_Johns   (market task, ephemeral)
-  desired_count = 1                        Mon–Fri                         start.sh (NLP stripped)
-  python NLP/main_NLP.py                                                   market scripts:
-                                                                            src/main.py
-                                                                            realtimeDataIngestor.py
-                                                                            pnl_script.py
-                                                                            refresh.py
-                                                                            rbp_runner.py
-                                                                          exits when market closes
+                              ▼
+EventBridge Scheduler ──▶ ECS RunTask mqsmaster-prod
+  cron @ 11:00 America/St_Johns   (market task, ephemeral, public subnets)
+  Mon–Fri                         start.sh (persistent_scripts stripped)
+                                  market scripts:
+                                    src/main.py
+                                    realtimeDataIngestor.py
+                                    pnl_script.py
+                                    refresh.py
+                                    rbp_runner.py
+                                  exits when market closes
                               │
                               ├── RDS PostgreSQL (private subnets, task SG only)
                               ├── SSM Parameter Store (db creds, API keys)
-                              └── CloudWatch Logs (/ecs/mqsmaster-prod, streams: mqsmaster/*, nlp/*)
+                              └── CloudWatch Logs (/ecs/mqsmaster-prod)
 ```
 
 ## Workloads
 
 | Workload | Module | Lifecycle | Entrypoint |
 |---|---|---|---|
-| NLP service | `ecs-service-nlp` | Always-on ECS Service, restarts on crash | `python NLP/main_NLP.py` |
-| Market task | `ecs-task-market` | Ephemeral, EventBridge-triggered Mon–Fri | `start.sh` (NLP block stripped at runtime) |
+| Market task | `ecs-task-market` | Ephemeral, EventBridge-triggered Mon–Fri | `start.sh` (`persistent_scripts` stripped at runtime) |
+
+There is no always-on ECS Service. The `ecs-service-nlp` module and the
+`mqsmaster-prod-nlp` service it created were removed; the market task still
+strips `persistent_scripts=( ... )` from `start.sh`, so **NLP does not run
+anywhere in this stack**. Deleting that `sed` line in
+`modules/Livetrading/ecs-task-market/main.tf` would fold NLP back into the
+market task for the length of a session — sizing would need revisiting, since
+FinBERT wants roughly 2 GB beyond what the market scripts use.
+
+Practical consequences of having no Service:
+
+- The deploy role grants no `ecs:UpdateService`; CI's job ends at
+  `RegisterTaskDefinition`, and the scheduler picks the new revision up on its
+  next run because it targets the family, not a pinned revision.
+- The ECS cluster holds zero running tasks outside market hours, so Fargate
+  bills only for the ~7 h/day the session is up.
+- There is nothing to `--force-new-deployment`. A credential rotation reaches
+  the container at the next scheduled run.
 
 ## Network topology
 
-Both workloads run in a purpose-built VPC (`10.0.0.0/16`), not the default VPC.
+The workload runs in a purpose-built VPC (`10.0.0.0/16`), not the default VPC.
 
 ```
 VPC 10.0.0.0/16
-├── public subnets  10.0.4-5.0/24   IGW + one NAT gateway. No workloads.
-└── private subnets 10.0.1-2.0/24   Fargate tasks + RDS. No public IPs.
-                                     └── 0.0.0.0/0 ──▶ NAT ──▶ IGW ──▶ internet
-                                     └── S3 prefix ──▶ S3 gateway endpoint (free)
+├── public subnets  10.0.4-5.0/24   IGW + the Fargate task (public IP on the ENI).
+│                                    └── 0.0.0.0/0 ──▶ IGW ──▶ internet
+│                                    └── S3 prefix ──▶ S3 gateway endpoint (free)
+└── private subnets 10.0.1-2.0/24   RDS only. No public endpoint, no egress route.
 ```
 
-**Private does not mean isolated.** It means no inbound path and no public IP on
-the task ENI. Outbound is unchanged from the operator's point of view:
+Placement is controlled by `task_in_public_subnet`, which defaults to `true`.
+Setting it `false` moves the task back into the private subnets and re-creates a
+NAT gateway for its egress; RDS is private in both modes.
+
+**A public subnet does not mean an exposed task.** The task security group is
+**egress-only** — all protocols to `0.0.0.0/0`, zero ingress rules — so nothing
+on that public IP is reachable. It is an egress source address, not an inbound
+path. Adding a new data provider needs no VPC or SG change.
 
 | Destination | Path |
 |---|---|
-| FMP, Alpha Vantage, Apify (HTTPS) | private subnet → NAT → IGW |
-| ECR image layers (S3-backed) | S3 gateway endpoint, bypasses NAT |
-| SSM Parameter Store, CloudWatch Logs | private subnet → NAT → IGW |
-| RDS | stays inside the VPC |
+| FMP, Alpha Vantage, Apify (HTTPS) | public subnet → IGW |
+| ECR image layers (S3-backed) | S3 gateway endpoint |
+| SSM Parameter Store, CloudWatch Logs | public subnet → IGW |
+| RDS | stays inside the VPC — task reaches it by private IP, SG to SG |
 
-The task security group is **egress-only** — all protocols to `0.0.0.0/0`, zero
-ingress rules. Adding a new data provider needs no VPC or SG change.
-
-One behavioural change: outbound traffic now leaves from the NAT gateway's
-Elastic IP rather than a per-task public IP. If a provider IP-allowlists you,
-that EIP is the address to register, and it is stable across task restarts.
+**What the public placement gives up is a stable egress IP.** Fargate cannot hold
+an Elastic IP, so the task's public address is assigned at start and differs on
+every run. There is no address to register with a provider that IP-allowlists.
+If one does, set `task_in_public_subnet = false`: the task returns to the private
+subnets behind a NAT gateway whose Elastic IP *is* stable across restarts, at
+~$32/mo.
 
 `modules/Livetrading/networking` owns the task SG and the S3 endpoint; the VPC itself comes
 from `terraform-aws-modules/vpc` 6.6.0, composed in `main.tf`.
@@ -72,8 +95,8 @@ from `terraform-aws-modules/vpc` 6.6.0, composed in `main.tf`.
    nine parameter ARNs; the task role does not.
 3. **Database** — the RDS security group accepts Postgres traffic only from the
    Fargate task security group. There is no public endpoint.
-4. **Logs** — both workloads write to `/ecs/mqsmaster-prod`, separated by stream
-   prefix (`mqsmaster/*` vs `nlp/*`).
+4. **Logs** — the market task writes to `/ecs/mqsmaster-prod` under the
+   `mqsmaster/*` stream prefix.
 
 ## Secret wiring
 
@@ -166,9 +189,8 @@ curl and jq into the image removes that cushion; shift to 11:05 if you do.
 ## Image caveats
 
 `MQSMaster/.dockerignore` excludes `scripts/`, `workflows/`, and `NLP/articles/`.
-`NLP/` and `RBP/` are **no longer** wholesale-excluded, so the NLP service finds
-its code — the earlier `FileNotFoundError` hazard is resolved. Nothing under
-`src/`, `NLP/` or `RBP/` imports from `scripts/`, so that exclusion is safe.
+`NLP/` and `RBP/` are **no longer** wholesale-excluded. Nothing under `src/`,
+`NLP/` or `RBP/` imports from `scripts/`, so that exclusion is safe.
 `.env` is excluded too, which is correct: the market task writes a fresh one from
 the ECS-injected secrets before `start.sh` runs.
 

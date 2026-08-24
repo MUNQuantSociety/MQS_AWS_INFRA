@@ -104,21 +104,17 @@ data "aws_iam_policy_document" "deploy" {
     resources = ["*"]
   }
 
-  # amazon-ecs-deploy-task-definition, incl. wait-for-service-stability which
-  # polls DescribeServices.
-  statement {
-    sid = "ECSDeployNLPService"
-    actions = [
-      "ecs:UpdateService",
-      "ecs:DescribeServices",
-    ]
-    resources = [var.nlp_service_arn]
-  }
+  # No ecs:UpdateService / ecs:DescribeServices. This stack runs no ECS Service
+  # -- the only workload is the scheduled market task -- so there is nothing to
+  # update and nothing to poll for stability. The EventBridge schedule targets
+  # the task definition FAMILY, so a CI-registered revision is picked up by the
+  # next scheduled run with no deploy call at all. Re-add the grant only if an
+  # always-on Service comes back.
 
   # RegisterTaskDefinition re-submits executionRoleArn and taskRoleArn from the
   # downloaded definition, which counts as passing those roles. Without this the
-  # market and NLP register steps fail with an opaque AccessDenied. The
-  # PassedToService condition means these roles can only be handed to ECS.
+  # market register step fails with an opaque AccessDenied. The PassedToService
+  # condition means these roles can only be handed to ECS.
   statement {
     sid       = "PassECSTaskRoles"
     actions   = ["iam:PassRole"]

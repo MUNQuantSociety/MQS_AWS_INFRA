@@ -3,7 +3,8 @@
 Terraform that provisions ECS Fargate and a managed Postgres to run the
 [`MQSMaster`](../MQSMaster) quantitative trading project.
 
-- **NLP service** (always-on): runs `python NLP/main_NLP.py` 24/7. ECS restarts it on crash.
+One workload, on a schedule. Nothing runs between sessions.
+
 - **Market task** (scheduled, Mon–Fri): EventBridge fires at the 09:30 ET market open
   (11:00 `America/St_Johns`). The container runs `start.sh` and exits when the market
   closes. The trigger must not be moved earlier — `start.sh` shuts the session down if
@@ -13,7 +14,8 @@ Terraform that provisions ECS Fargate and a managed Postgres to run the
 
 | Doc | Contents |
 |---|---|
-| [docs/architecture.md](docs/architecture.md) | Diagram, workload split, secret wiring, image caveats |
+| [docs/architecture-diagram.md](docs/architecture-diagram.md) | Mermaid diagrams of the deployed stack, resource inventory, what is deliberately absent |
+| [docs/architecture.md](docs/architecture.md) | Workload split, network topology, secret wiring, image caveats |
 | [docs/operations.md](docs/operations.md) | Deploy, first image push, manual runs, logs, secret rotation |
 | [docs/cost-model.md](docs/cost-model.md) | Monthly estimate and the levers that move it |
 
@@ -31,14 +33,14 @@ MQS_AWS_INFRA/
 └── terraform/
     ├── environments/
     │   ├── Backtest_Visualizer/            # Visualizer API: Fargate + ALB, no NAT, external DB
-    │   └── Livetrading/                    # Trading bot + NLP + RDS, private subnets behind one NAT
+    │   └── Livetrading/                    # Trading bot in public subnets, RDS private, no NAT
     │       ├── main.tf                     # Module composition
     │       ├── locals.tf                   # name_prefix, log group, secret wiring
     │       ├── variables.tf                # All input variables
     │       ├── outputs.tf                  # Top-level outputs
     │       ├── providers.tf                # AWS provider + default tags
-    │       ├── terraform.tf                # HCP `cloud` block + version pins (one workspace = one state)
-    │       ├── backend.tf                  # S3 backend stub (alternative to HCP)
+    │       ├── terraform.tf                # Terraform + provider version pins
+    │       ├── backend.tf                  # S3 state backend (one key = one state)
     │       └── terraform.tfvars.example    # Copy → terraform.tfvars
     │   (Backtest_Visualizer holds the same file set.)
     └── modules/                            # Split by owning stack — see below
@@ -51,7 +53,6 @@ MQS_AWS_INFRA/
         │   ├── rds-postgres/               # RDS instance, subnet group, DB SG
         │   ├── ecs-cluster/                # Cluster + Fargate capacity providers
         │   ├── ecs-task-market/            # Market-hours task definition
-        │   ├── ecs-service-nlp/            # Always-on task definition + ECS Service
         │   ├── github-oidc/                # GitHub Actions OIDC provider + deploy role
         │   └── eventbridge-scheduler/      # Scheduler/Rule + RunTask IAM role
         └── Backtest_Visualizer/
@@ -65,11 +66,11 @@ MQS_AWS_INFRA/
             └── ecs-service-api/            # API task definition + ECS Service
 ```
 
-**Two independent stacks.** `Livetrading` runs the trading bot, the NLP service
-and RDS in private subnets behind a single NAT gateway. `Backtest_Visualizer`
-runs the visualizer API on Fargate behind an ALB with **no NAT gateway** and no
-database of its own. They share no state, no VPC and no modules — being in one
-repository does not put them on one network.
+**Two independent stacks.** `Livetrading` runs the trading bot in public subnets
+on an egress-only security group, with RDS private and **no NAT gateway**.
+`Backtest_Visualizer` runs the visualizer API on Fargate behind an ALB, also with
+no NAT gateway and no database of its own. They share no state, no VPC and no
+modules — being in one repository does not put them on one network.
 
 **Why modules are split by stack rather than pooled.** Six module names overlap,
 but only some are the same thing (`networking` decorates a VPC in one stack and
@@ -80,7 +81,7 @@ impossible. The cost is that `cloudwatch-logs`, `ecs-cluster`, `iam-roles` and
 `ecr-repository` exist in both trees and drift independently.
 
 **Conventions.** Module directories are kebab-case and named for the AWS service
-they own (`ecs-service-nlp`, not `nlp_service`); the two top-level directories
+they own (`ecs-task-market`, not `market_task`); the two top-level directories
 under `modules/` are named for the stack that consumes them. Terraform
 identifiers — module labels, variables, outputs — stay snake_case per the
 HashiCorp style guide. Every module has the same three files: `main.tf`,
@@ -112,20 +113,19 @@ Full deploy steps in [docs/operations.md](docs/operations.md#deploy).
 
 | Service | Purpose |
 |---|---|
-| **ECS (Fargate)** | Runs both workloads — one long-lived Service, one scheduled task |
+| **ECS (Fargate)** | Runs the scheduled market task. No long-lived Service — the cluster is idle between sessions |
 | **ECR** | Container image registry, with a lifecycle policy to expire old images |
 | **RDS (PostgreSQL)** | Managed database, private, reachable only from the task SG |
 | **EventBridge Scheduler** | Timezone-aware Mon–Fri cron that calls ECS `RunTask` |
 | **SSM Parameter Store** | DB credentials and API keys as SecureString params, injected by ECS at task start |
 | **CloudWatch Logs** | Single log group for both workloads, split by stream prefix |
 | **IAM** | Task execution role, task role, scheduler invoke role |
-| **VPC / EC2 networking** | Purpose-built VPC: private subnets for all workloads, public subnets for the IGW + a single NAT gateway, free S3 gateway endpoint, two managed security groups |
+| **VPC / EC2 networking** | Purpose-built VPC: public subnets carry the IGW and the scheduled task, private subnets carry RDS only, free S3 gateway endpoint, two managed security groups. No NAT gateway |
 
 ## Future work
 
-- Move state to the S3 backend + DynamoDB lock (stub in `backend.tf`).
 - Add a stop-task schedule as a safety net if `is_market_open` stays true past close.
 - CloudWatch Alarm + SNS on `ECSTaskStateChange` failures.
-- FARGATE_SPOT for the NLP service (~70% cheaper, tolerates restarts).
-- Second NAT gateway for HA egress (`single_nat_gateway = false`, ~+$32/mo) if
-  the batch workload ever becomes latency- or availability-critical.
+- A stable egress IP (`task_in_public_subnet = false`, ~+$32/mo for the NAT
+  gateway and its Elastic IP) if any market data provider starts IP-allowlisting.
+  Today none do, and Fargate cannot hold an Elastic IP on its own.

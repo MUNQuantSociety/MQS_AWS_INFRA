@@ -1,0 +1,76 @@
+# gitleaks configuration for a PUBLIC infrastructure repository.
+#
+# Starts from the upstream ruleset (which already covers AWS keys, GitHub
+# tokens, Slack tokens, private keys, JWTs, Supabase keys and ~150 more) and
+# adds only what is specific to this repo.
+#
+# The allowlist is deliberately narrow. Every entry is a hole; widening it to
+# silence a noisy finding is how a real credential eventually gets waved
+# through. Prefer changing the file to changing this.
+
+[extend]
+useDefault = true
+
+# -----------------------------------------------------------------------------
+# Repo-specific rules
+# -----------------------------------------------------------------------------
+
+[[rules]]
+id = "mqs-tfvars-real-value"
+description = "Non-placeholder value assigned to a known secret variable"
+# Matches an 8+ character quoted value assigned to one of this repo's secret
+# variable names in HCL.
+#
+# No negative lookahead here. gitleaks compiles with Go's RE2, which has no
+# lookaround at all -- a `(?!...)` does not merely fail to match, it panics the
+# whole binary at config load and every scan exits 2. Placeholder filtering is
+# the [allowlist] block's job instead; REPLACE_ME and friends are listed there
+# and are matched against the captured secret.
+#
+# secretGroup = 2 is what makes that work. Allowlist regexes are tested against
+# the SECRET, not the whole match, and without secretGroup the secret is group 1
+# -- the variable name. The allowlist was then comparing REPLACE_ME against
+# "MARKET_DATA_PASSWORD", never matching, and all 28 placeholder lines in the
+# tracked *.example templates reported as leaks. Group 2 is the quoted value.
+regex = '''(?i)(password|FMP_API_KEY|ALPHA_KEY|APIFY_KEY|SUPABASE_ANON_KEY|MARKET_DATA_PASSWORD)\s*=\s*"([^"]{8,})"'''
+secretGroup = 2
+tags = ["terraform", "credential"]
+
+[[rules]]
+id = "mqs-postgres-uri"
+description = "Postgres connection string with an inline password"
+regex = '''postgres(ql)?://[^:\s/]+:[^@\s]+@[^\s/]+'''
+tags = ["database", "credential"]
+
+[[rules]]
+id = "mqs-hcp-token"
+description = "HCP Terraform / Terraform Cloud API token"
+regex = '''[A-Za-z0-9]{14}\.atlasv1\.[A-Za-z0-9_-]{60,}'''
+tags = ["terraform", "token"]
+
+# -----------------------------------------------------------------------------
+# Allowlist
+# -----------------------------------------------------------------------------
+
+[allowlist]
+description = "Placeholder templates and documentation"
+
+# Placeholder tokens used across *.example and docs. A finding whose matched
+# value is one of these is by definition not a credential.
+regexes = [
+  '''REPLACE_ME''',
+  '''CHANGE_ME''',
+  '''<account>''',
+  '''<acct>''',
+  '''<id>''',
+  '''<new>''',
+  '''<region>''',
+  '''your-''',
+  '''placeholder''',
+]
+
+# Terraform's own lockfile is full of high-entropy provider hashes that trip
+# generic entropy rules and can never hold a secret.
+paths = [
+  '''\.terraform\.lock\.hcl$''',
+]

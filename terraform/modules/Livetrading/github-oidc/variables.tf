@@ -24,11 +24,6 @@ variable "ecr_repository_arn" {
   type        = string
 }
 
-variable "nlp_service_arn" {
-  description = "ARN of the always-on NLP ECS service the workflow updates."
-  type        = string
-}
-
 variable "task_execution_role_arn" {
   description = "ECS task execution role ARN. Needed for iam:PassRole on RegisterTaskDefinition."
   type        = string

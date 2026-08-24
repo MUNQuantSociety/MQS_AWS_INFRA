@@ -9,26 +9,35 @@ module "ecr_repository" {
 }
 
 ###############################################################################
-# Dedicated VPC. Public subnets carry only the IGW + NAT gateway; every
-# workload (Fargate tasks, RDS) lives in the private subnets.
+# Dedicated VPC. Subnet placement is driven by task_in_public_subnet:
 #
-# OUTBOUND INTERNET IS PRESERVED. "Private" here means no inbound path and no
-# public IP on the task ENI -- it does NOT mean isolated. Both workloads still
-# reach their third-party API hosts exactly as before:
+#   true  (default) -- the Fargate task runs in the PUBLIC subnets with a public
+#                      IP on its ENI and egresses straight out the IGW. RDS
+#                      stays in the private subnets. No NAT gateway is created.
+#   false           -- the task runs in the PRIVATE subnets alongside RDS and
+#                      egresses through a NAT gateway.
 #
-#   - ecs_service_nlp (always-on) and ecs_task_market (scheduled) call out to
-#     FMP, Alpha Vantage and Apify over HTTPS.
-#   - Path: private subnet -> 0.0.0.0/0 route -> NAT gateway -> IGW -> internet.
-#   - The task SG (modules/Livetrading/networking) allows all egress, so no per-host
-#     allowlisting is required; adding a new data provider needs no VPC change.
+# Either way there is NO INBOUND PATH: the task SG (modules/Livetrading/
+# networking) has zero ingress rules, so a public IP on the ENI is an egress
+# address, not a way in. RDS is never public in either mode -- it has no public
+# endpoint and its SG accepts 5432 from the task SG only, which works across
+# subnet tiers because the task reaches it by private IP inside the VPC.
 #
-# The only traffic that does NOT take the NAT is S3 (and therefore ECR image
-# layers), which is routed through the free S3 gateway endpoint instead.
+# OUTBOUND INTERNET IS PRESERVED in both modes. ecs_task_market calls FMP,
+# Alpha Vantage and Apify over HTTPS; the task SG allows all egress, so adding a
+# data provider needs no VPC change. Only the path and the source address differ:
 #
-# Cost: single_nat_gateway = true keeps this to ONE NAT gateway (~$32/mo)
-# instead of one per AZ (~$97/mo). It is a single-AZ failure point for egress,
-# which is the accepted trade for a batch/scheduled workload. API responses are
-# JSON, so NAT data processing ($0.045/GB) on those calls is negligible.
+#   public  : public subnet  -> 0.0.0.0/0 -> IGW -> internet
+#   private : private subnet -> 0.0.0.0/0 -> NAT gateway -> IGW -> internet
+#
+# THE TRADE. A Fargate task cannot hold an Elastic IP. In public mode its public
+# IP is assigned at task start and differs on every run, so outbound traffic has
+# no stable source address. If a data provider ever IP-allowlists this stack,
+# set task_in_public_subnet = false: that restores the NAT gateway and its stable
+# EIP, at ~$32/mo. Cost is the only reason the default is the other way.
+#
+# S3 (and therefore ECR image layers) takes the free S3 gateway endpoint in both
+# modes -- the endpoint is associated with both tiers' route tables.
 ###############################################################################
 
 module "vpc" {
@@ -42,10 +51,16 @@ module "vpc" {
   private_subnets = var.private_subnet_cidrs
   public_subnets  = var.public_subnet_cidrs
 
-  enable_nat_gateway = true
+  # Only the private tier needs a NAT gateway, and in public mode the only thing
+  # left there is RDS, which makes no outbound connections. Creating one anyway
+  # would bill ~$32/mo to route nothing.
+  enable_nat_gateway = !var.task_in_public_subnet
   single_nat_gateway = var.single_nat_gateway
 
-  # Tasks run in private subnets and never take a public IP.
+  # Subnet-level auto-assign stays off even in public mode. Fargate sets
+  # assignPublicIp on the ENI itself (see module.eventbridge_scheduler), which is
+  # independent of this flag -- so anything else launched into these subnets does
+  # not silently inherit a public IP.
   map_public_ip_on_launch = false
 
   # Flow logs bill per GB ingested; off by default to keep the floor low.
@@ -61,18 +76,20 @@ module "networking" {
   name_prefix = local.name_prefix
   vpc_id      = module.vpc.vpc_id
   aws_region  = var.aws_region
-  # Private RTs are what actually matters: all task/RDS S3 traffic originates
-  # there and takes the endpoint instead of the NAT. Public RTs are included for
-  # completeness -- today nothing runs in the public subnets (they carry only the
-  # IGW and NAT gateway), so that half is inert until something is placed there.
+  # Both tiers, so the S3 endpoint follows the task wherever task_in_public_subnet
+  # puts it. In public mode the public RTs carry the real traffic (ECR layer pulls
+  # off the task ENI) and the private half is inert -- RDS makes no S3 calls; in
+  # private mode the roles swap.
   route_table_ids = concat(module.vpc.private_route_table_ids, module.vpc.public_route_table_ids)
 }
 
 module "rds_postgres" {
   source = "../../modules/Livetrading/rds-postgres"
 
-  name_prefix            = local.name_prefix
-  vpc_id                 = module.vpc.vpc_id
+  name_prefix = local.name_prefix
+  vpc_id      = module.vpc.vpc_id
+  # Always private, whatever task_in_public_subnet says. The DB SG accepts 5432
+  # from the task SG only, which holds across tiers.
   subnet_ids             = module.vpc.private_subnets
   task_security_group_id = module.networking.task_security_group_id
 
@@ -139,30 +156,16 @@ module "ecs_task_market" {
   aws_region              = var.aws_region
 }
 
-module "ecs_service_nlp" {
-  source = "../../modules/Livetrading/ecs-service-nlp"
-
-  name_prefix             = local.name_prefix
-  image_uri               = local.image_uri
-  task_cpu                = var.nlp_task_cpu
-  task_memory             = var.nlp_task_memory
-  desired_count           = var.nlp_desired_count
-  task_execution_role_arn = module.iam_roles.task_execution_role_arn
-  task_role_arn           = module.iam_roles.task_role_arn
-  cluster_id              = module.ecs_cluster.cluster_id
-  subnet_ids              = module.vpc.private_subnets
-  security_group_id       = module.networking.task_security_group_id
-  assign_public_ip        = false
-  container_secrets       = local.container_secrets
-  log_group_name          = module.cloudwatch_logs.log_group_name
-  aws_region              = var.aws_region
-}
-
 ###############################################################################
 # CI/CD identity. The deploy workflow (.github/workflows/deploy.yml, which must
 # live in the MQSMaster repo alongside its Dockerfile) assumes this role via
 # OIDC -- no static AWS access keys anywhere. Feed the deploy_role_arn output
 # into that repo's AWS_DEPLOY_ROLE_ARN secret.
+#
+# The stack runs no ECS Service, so the deploy role grants no ecs:UpdateService.
+# CI's job ends at RegisterTaskDefinition: the scheduler targets the task
+# definition FAMILY rather than a pinned revision, so the next scheduled run
+# picks the new revision up on its own.
 ###############################################################################
 
 module "github_oidc" {
@@ -173,7 +176,6 @@ module "github_oidc" {
   allowed_refs      = var.github_allowed_refs
 
   ecr_repository_arn      = module.ecr_repository.repository_arn
-  nlp_service_arn         = module.ecs_service_nlp.service_arn
   task_execution_role_arn = module.iam_roles.task_execution_role_arn
   task_role_arn           = module.iam_roles.task_role_arn
 }
@@ -189,7 +191,11 @@ module "eventbridge_scheduler" {
   task_definition_arn_without_revision = module.ecs_task_market.task_definition_arn_without_revision
   task_execution_role_arn              = module.iam_roles.task_execution_role_arn
   task_role_arn                        = module.iam_roles.task_role_arn
-  subnet_ids                           = module.vpc.private_subnets
-  security_group_id                    = module.networking.task_security_group_id
-  assign_public_ip                     = false
+  # A public-subnet task MUST take a public IP. Without one it has no route to
+  # the internet at all -- the public route table points 0.0.0.0/0 at the IGW,
+  # and the IGW drops traffic from an ENI with no public address. The task would
+  # fail at image pull, before any of the application code runs.
+  subnet_ids        = var.task_in_public_subnet ? module.vpc.public_subnets : module.vpc.private_subnets
+  security_group_id = module.networking.task_security_group_id
+  assign_public_ip  = var.task_in_public_subnet
 }

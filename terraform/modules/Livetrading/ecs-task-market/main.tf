@@ -1,8 +1,15 @@
 ###############################################################################
-# Market-hours Fargate task definition.
+# Market-hours Fargate task definition. The only workload in this stack.
 #
 # Runs start.sh after stripping the persistent_scripts=( ... ) array, so this
-# task only spawns market-hours scripts. NLP runs as its own always-on service.
+# task only spawns market-hours scripts.
+#
+# NOTE: the always-on NLP ECS Service was removed from this stack, and the strip
+# below was kept, so NLP now runs NOWHERE. That is deliberate, not an oversight.
+# To fold NLP back into this task instead, delete the `sed` line in the command
+# below -- start.sh then spawns persistent_scripts alongside the market scripts,
+# for the duration of the session only. Sizing would need revisiting: FinBERT
+# wants ~2 GB on top of what the market scripts already use.
 ###############################################################################
 
 locals {
@@ -59,9 +66,10 @@ resource "aws_ecs_task_definition" "this" {
           # would clobber the ECS-injected env vars). Materialise a real .env
           # from the secrets ECS already injected, so source preserves them.
           "{ ${local.env_writer}; } > .env",
-          # NLP is its own ECS service. Delete persistent_scripts=( ... ) so
-          # this task does NOT also spawn NLP. The downstream for-loop becomes
-          # a no-op on an unset array.
+          # Delete persistent_scripts=( ... ) so this task spawns only the
+          # market-hours scripts. The downstream for-loop becomes a no-op on an
+          # unset array. Removing this line is what would bring NLP back --
+          # see the header comment.
           "sed -i '/^persistent_scripts=(/,/^)/d' ./start.sh",
           "exec ./start.sh",
         ])
