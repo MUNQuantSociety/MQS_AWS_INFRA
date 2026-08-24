@@ -1,5 +1,5 @@
 ###############################################################################
-# Market-hours Fargate task definition.
+# Market-hours Fargate task definition. The only workload in this stack.
 #
 # Runs start.sh with SKIP_PERSISTENT_SCRIPTS=1, so this task only spawns
 # market-hours scripts. NLP runs as its own always-on service.

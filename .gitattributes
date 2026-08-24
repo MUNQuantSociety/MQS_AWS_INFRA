@@ -1,0 +1,18 @@
+# Normalise line endings so a clone behaves the same on Windows, macOS and the
+# CI runner.
+* text=auto
+
+# Shell scripts MUST stay LF. Git for Windows has core.autocrlf=true by default,
+# and a hook checked out with CRLF fails at the shebang with
+# "bad interpreter: /bin/sh^M" -- which reads as "the guard is broken" rather
+# than "the guard did not run", the more dangerous of the two.
+.githooks/** text eol=lf
+*.sh text eol=lf
+
+# Terraform and CI definitions are consumed by tooling that expects LF.
+*.tf text eol=lf
+*.tfvars text eol=lf
+*.hcl text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf

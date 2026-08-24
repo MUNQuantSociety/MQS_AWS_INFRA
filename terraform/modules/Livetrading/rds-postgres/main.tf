@@ -4,7 +4,7 @@
 # Provisions a managed Postgres instance in the dedicated VPC's private subnets, reachable
 # only from the ECS Fargate tasks (ingress 5432 from the task security group).
 # The instance endpoint + port are exported and wired into the DB secret so the
-# market + NLP containers connect to this DB instead of an external host.
+# market containers connect to this DB instead of an external host.
 ###############################################################################
 
 resource "aws_db_subnet_group" "this" {

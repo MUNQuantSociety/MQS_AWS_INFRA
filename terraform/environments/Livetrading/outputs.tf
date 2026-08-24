@@ -32,23 +32,8 @@ output "market_container_name" {
   value       = module.ecs_task_market.container_name
 }
 
-output "nlp_task_definition_family" {
-  description = "Always-on NLP task definition family."
-  value       = module.ecs_service_nlp.task_definition_family
-}
-
-output "nlp_service_name" {
-  description = "Always-on NLP ECS service name."
-  value       = module.ecs_service_nlp.service_name
-}
-
-output "nlp_container_name" {
-  description = "NLP container name (for CI/CD render step)."
-  value       = module.ecs_service_nlp.container_name
-}
-
 output "log_group_name" {
-  description = "CloudWatch log group for both tasks."
+  description = "CloudWatch log group for the market task."
   value       = module.cloudwatch_logs.log_group_name
 }
 
@@ -73,7 +58,17 @@ output "task_security_group_id" {
 }
 
 output "task_subnet_ids" {
-  description = "Private subnets used by all Fargate tasks."
+  description = "Subnets the scheduled Fargate task runs in — public when task_in_public_subnet is true, private otherwise."
+  value       = var.task_in_public_subnet ? module.vpc.public_subnets : module.vpc.private_subnets
+}
+
+output "task_assigns_public_ip" {
+  description = "Whether the task ENI takes a public IP. True means the egress source address changes on every run."
+  value       = var.task_in_public_subnet
+}
+
+output "rds_subnet_ids" {
+  description = "Private subnets holding RDS. Never public."
   value       = module.vpc.private_subnets
 }
 
@@ -83,7 +78,7 @@ output "vpc_id" {
 }
 
 output "nat_gateway_ids" {
-  description = "NAT gateway IDs providing egress for the private subnets."
+  description = "NAT gateway IDs providing egress for the private subnets. Empty when task_in_public_subnet is true — no NAT gateway is created in that mode."
   value       = module.vpc.natgw_ids
 }
 

@@ -336,6 +336,23 @@ EOT
     MARKET_DATA_PASSWORD = "REPLACE_ME"
     MARKET_DATA_SSLMODE  = "require"
   }
+
+  # The REPLACE_ME default keeps the module parseable without credentials. It
+  # must never reach AWS: a forgotten terraform.tfvars would otherwise apply
+  # cleanly and write placeholder text into six SecureString parameters, which
+  # surfaces only as a connection failure inside a running task.
+  validation {
+    condition     = !contains(values(var.market_data_secret_values), "REPLACE_ME")
+    error_message = "market_data_secret_values still holds REPLACE_ME. Set real values via terraform.tfvars or TF_VAR_market_data_secret_values before applying."
+  }
+
+  # This connection crosses the public internet — the stack has no NAT and no
+  # VPC peering to the market_data host. "prefer" and "allow" silently fall back
+  # to an unencrypted session, which would put the password on the wire.
+  validation {
+    condition     = contains(["require", "verify-ca", "verify-full"], var.market_data_secret_values.MARKET_DATA_SSLMODE)
+    error_message = "MARKET_DATA_SSLMODE must be require, verify-ca or verify-full. Weaker modes fall back to plaintext over the public internet."
+  }
 }
 
 variable "api_secret_values" {
@@ -348,5 +365,13 @@ variable "api_secret_values" {
   default = {
     FMP_API_KEY       = "REPLACE_ME"
     SUPABASE_ANON_KEY = "REPLACE_ME"
+  }
+
+  validation {
+    condition = !contains([
+      var.api_secret_values.FMP_API_KEY,
+      var.api_secret_values.SUPABASE_ANON_KEY,
+    ], "REPLACE_ME")
+    error_message = "api_secret_values still holds REPLACE_ME. Set real values via terraform.tfvars or TF_VAR_api_secret_values before applying."
   }
 }

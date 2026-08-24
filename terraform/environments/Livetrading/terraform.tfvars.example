@@ -6,7 +6,12 @@ environment         = "prod"
 # Existing repo, adopted (not created) by Terraform. Must already exist.
 ecr_repository_name = "livetradingbot"
 # Must be a tag that exists in that repo; it carries no "latest".
-image_tag           = "1.0.5-4"
+# Newest tag in ECR as of 2026-08-09. Check before applying -- a tag that is not
+# in the repo applies cleanly and only fails at task start with
+# CannotPullContainerError:
+#   aws ecr describe-images --repository-name livetradingbot \
+#     --query 'reverse(sort_by(imageDetails,&imagePushedAt))[:5].imageTags' --output text
+image_tag           = "1.0.5-6"
 
 # CI/CD. github_repository is the repo GitHub Actions RUNS deploy.yml in -- the
 # MQSMaster repo with the Dockerfile, not this one. A fork's OIDC tokens carry a
@@ -17,38 +22,54 @@ image_tag           = "1.0.5-4"
 github_repository   = "MUNQuantSociety/MQSMaster"
 # github_allowed_refs = ["ref:refs/heads/main", "ref:refs/heads/dev"]
 
-# Networking. Defaults build a dedicated VPC: workloads in private subnets,
-# IGW + one NAT gateway in the public subnets. All optional - omit to accept
-# the defaults below.
+# Networking. Defaults build a dedicated VPC with the scheduled task in the
+# PUBLIC subnets and RDS in the private ones. All optional - omit to accept the
+# defaults below.
 #
-# single_nat_gateway is the main cost lever here: true = one NAT (~$32/mo),
-# false = one per AZ (~$97/mo) for HA egress.
+# task_in_public_subnet is the cost lever, and the only one that matters here:
+#   true  (default) - task egresses out the IGW on a public IP. NO NAT gateway is
+#                     created, saving ~$32/mo. The task SG still has zero ingress
+#                     rules, so nothing is reachable from outside; RDS stays
+#                     private with no public endpoint.
+#   false           - task moves to the private subnets behind a NAT gateway.
+#                     Costs ~$32/mo and buys ONE thing: a stable egress IP.
+#
+# Set it false if a market data provider IP-allowlists you. Fargate cannot hold
+# an Elastic IP, so in public mode the task's outbound address is fresh on every
+# run and there is nothing to register with a provider.
+#
+# single_nat_gateway only applies when task_in_public_subnet = false: true = one
+# NAT (~$32/mo), false = one per AZ (~$97/mo) for HA egress.
 #
 # az_count = 2 is the floor: RDS subnet groups require two AZs. It is NOT a cost
-# lever -- single_nat_gateway caps NAT at one gateway whatever the AZ count, and
-# subnets/route tables/IGW carry no hourly charge. Raise it for spread, not spend.
-vpc_cidr             = "10.0.0.0/16"
-az_count             = 2
-private_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24"] # tasks + RDS
-public_subnet_cidrs  = ["10.0.4.0/24", "10.0.5.0/24"] # IGW + NAT only
-single_nat_gateway   = true
+# lever -- subnets/route tables/IGW carry no hourly charge. Raise it for spread,
+# not spend.
+vpc_cidr              = "10.0.0.0/16"
+az_count              = 2
+private_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"] # RDS (+ task when private)
+public_subnet_cidrs   = ["10.0.4.0/24", "10.0.5.0/24"] # IGW + task
+task_in_public_subnet = true
+single_nat_gateway    = true
 
-# Market task (scheduled, Mon-Fri).
+# Market task (scheduled, Mon-Fri). The only workload in this stack -- there is
+# no always-on ECS Service, so nothing runs between scheduled sessions.
 market_task_cpu    = "2048" # 2 vCPU
 market_task_memory = "8192" # 8 GB
 
-# NLP service (always-on). Drop to "256"/"2048" for ~$11/mo, slower batches.
-nlp_task_cpu      = "512"  # .5 vCPU
-nlp_task_memory   = "2048" # 2 GB - FinBERT base floor
-nlp_desired_count = 1
-
 log_retention_days = 7
 
-# RDS PostgreSQL. 4 GB RAM = 2 vCPU burstable.
+# RDS PostgreSQL.
+#
+# Storage grows in place but NEVER shrinks: dropping db_allocated_storage later
+# means a dump/restore into a new instance. Start at 100 and let autoscaling
+# raise it to the ceiling as needed.
+#
+# The instance class is the opposite -- an in-place modify with one reboot. Move
+# to db.t4g.medium (4 GB) if the cache hit ratio degrades.
 db_engine_version          = "16"
-db_instance_class          = "db.t4g.medium" # 2 vCPU / 4 GB (Graviton). db.t3.medium for x86.
-db_allocated_storage       = 200             # GB. Set 300 for more headroom.
-db_max_allocated_storage   = 300             # autoscale ceiling; == allocated to disable.
+db_instance_class          = "db.t4g.small" # 2 vCPU / 2 GB (Graviton). db.t3.small for x86.
+db_allocated_storage       = 100            # GB, gp3.
+db_max_allocated_storage   = 200            # autoscale ceiling; == allocated to disable.
 db_multi_az                = false           # true = HA standby, ~2x cost.
 db_backup_retention_period = 7
 # Prod-safe. deletion_protection = true makes `terraform destroy` FAIL until you
