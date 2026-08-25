@@ -1,15 +1,21 @@
 ###############################################################################
 # Market-hours Fargate task definition. The only workload in this stack.
 #
-# Runs start.sh after stripping the persistent_scripts=( ... ) array, so this
-# task only spawns market-hours scripts.
+# Runs start.sh unmodified, so persistent_scripts (NLP/main_NLP.py) spawns
+# alongside the market-hours scripts, for the duration of this session only --
+# it is killed along with everything else when start.sh's watchdog shuts down
+# at market close, and restarted fresh on the next scheduled run. There is no
+# always-on NLP ECS Service in this stack (see #14/MQS_AWS_INFRA -- dropped for
+# cost, and a later attempt to restore it as a separate Service was abandoned
+# in favor of this folded-in approach instead).
 #
-# NOTE: the always-on NLP ECS Service was removed from this stack, and the strip
-# below was kept, so NLP now runs NOWHERE. That is deliberate, not an oversight.
-# To fold NLP back into this task instead, delete the `sed` line in the command
-# below -- start.sh then spawns persistent_scripts alongside the market scripts,
-# for the duration of the session only. Sizing would need revisiting: FinBERT
-# wants ~2 GB on top of what the market scripts already use.
+# Previously this task's command stripped persistent_scripts=( ... ) out of
+# start.sh via sed before exec'ing it, so NLP ran nowhere at all. That strip is
+# gone now -- see git history if it ever needs to come back. Sizing note: NLP
+# now shares task_cpu/task_memory with the market scripts in the SAME
+# container, so if FinBERT starts contending for memory, raise task_memory
+# (FinBERT wants roughly ~2 GB on top of whatever the market scripts alone
+# need) rather than assuming it has headroom by default.
 ###############################################################################
 
 locals {
@@ -66,11 +72,6 @@ resource "aws_ecs_task_definition" "this" {
           # would clobber the ECS-injected env vars). Materialise a real .env
           # from the secrets ECS already injected, so source preserves them.
           "{ ${local.env_writer}; } > .env",
-          # Delete persistent_scripts=( ... ) so this task spawns only the
-          # market-hours scripts. The downstream for-loop becomes a no-op on an
-          # unset array. Removing this line is what would bring NLP back --
-          # see the header comment.
-          "sed -i '/^persistent_scripts=(/,/^)/d' ./start.sh",
           "exec ./start.sh",
         ])
       ]
