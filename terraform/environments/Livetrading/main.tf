@@ -122,11 +122,18 @@ module "ssm_parameters" {
   api_parameter_version = var.api_parameter_version
 }
 
+module "job_state" {
+  source = "../../modules/Livetrading/job-state"
+
+  name_prefix = local.name_prefix
+}
+
 module "iam_roles" {
   source = "../../modules/Livetrading/iam-roles"
 
-  name_prefix    = local.name_prefix
-  parameter_arns = module.ssm_parameters.parameter_arn_list
+  name_prefix              = local.name_prefix
+  parameter_arns           = module.ssm_parameters.parameter_arn_list
+  job_state_parameter_arns = [module.job_state.parameter_arn]
 }
 
 module "cloudwatch_logs" {
@@ -154,6 +161,8 @@ module "ecs_task_market" {
   container_secrets       = local.container_secrets
   log_group_name          = module.cloudwatch_logs.log_group_name
   aws_region              = var.aws_region
+
+  market_data_prune_ssm_param = module.job_state.parameter_name
 }
 
 ###############################################################################
