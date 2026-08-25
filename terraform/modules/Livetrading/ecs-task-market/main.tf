@@ -81,6 +81,9 @@ resource "aws_ecs_task_definition" "this" {
       environment = [
         { name = "PYTHONUNBUFFERED", value = "1" },
         { name = "PYTHON_VENV", value = "/app/MQS/bin/python" },
+        { name = "AWS_REGION", value = var.aws_region },
+        { name = "MARKET_DATA_RETENTION_DAYS", value = tostring(var.market_data_retention_days) },
+        { name = "MARKET_DATA_PRUNE_SSM_PARAM", value = var.market_data_prune_ssm_param },
       ]
 
       secrets = var.container_secrets

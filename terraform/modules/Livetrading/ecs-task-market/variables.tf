@@ -51,3 +51,20 @@ variable "aws_region" {
   description = "AWS region for log driver."
   type        = string
 }
+
+# Documentary only -- see the ignore_changes note on aws_ecs_task_definition
+# below. These reach a running container only after the one-time
+# `terraform apply -replace=...` bootstrap; the market_data retention pruner
+# (src/orchestrator/retention/prune_market_data.py, run via
+# start.sh's persistent_scripts) has matching hardcoded defaults and works
+# with zero env vars set.
+variable "market_data_retention_days" {
+  description = "Rolling window (days) the market_data retention pruner keeps. Matches the pruner's own MARKET_DATA_RETENTION_DAYS default (545)."
+  type        = number
+  default     = 545
+}
+
+variable "market_data_prune_ssm_param" {
+  description = "SSM parameter name/path holding the retention pruner's last-run date (see modules/Livetrading/job-state)."
+  type        = string
+}

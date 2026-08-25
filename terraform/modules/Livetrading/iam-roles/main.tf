@@ -40,3 +40,23 @@ resource "aws_iam_role" "task" {
   name               = "${var.name_prefix}-task"
   assume_role_policy = data.aws_iam_policy_document.ecs_assume_role.json
 }
+
+# Unlike task_execution_secrets above (the ECS agent injecting container
+# secrets at launch), this is application code calling the SSM API directly
+# via boto3 at runtime -- singular Get/PutParameter, not plural GetParameters.
+# count-guarded so the module still applies cleanly with no job-state ARNs
+# wired in (the default).
+data "aws_iam_policy_document" "task_job_state" {
+  count = length(var.job_state_parameter_arns) > 0 ? 1 : 0
+  statement {
+    actions   = ["ssm:GetParameter", "ssm:PutParameter"]
+    resources = var.job_state_parameter_arns
+  }
+}
+
+resource "aws_iam_role_policy" "task_job_state" {
+  count  = length(var.job_state_parameter_arns) > 0 ? 1 : 0
+  name   = "${var.name_prefix}-task-job-state"
+  role   = aws_iam_role.task.id
+  policy = data.aws_iam_policy_document.task_job_state[0].json
+}
